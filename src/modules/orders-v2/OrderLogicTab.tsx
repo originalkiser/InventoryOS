@@ -111,10 +111,10 @@ export function OrderLogicTab({ settings: s }: { settings: OrderSettings }) {
       </Rule>
 
       <Rule step="2c" title="How much to order" summary="Enough to reach the target, never past a hard limit."
-        flags={['over_dos_max', 'capacity_capped', 'drum_capped']}>
+        flags={['over_dos_max', 'capacity_capped', 'bulk_capacity_limited', 'drum_capped']}>
         <li>Target = fill to <Setting>{s.days_of_supply_target} days</Setting> of supply: (target × usage − on hand) ÷ package size, rounded <strong>up</strong> to a whole unit (down when a cap binds).</li>
         <li><strong>DOS max</strong> (<Setting>{s.days_of_supply_max} days</Setting>) is a <em>soft</em> ceiling — the first pass stops there, but smoothing may go past it and says so with an "Over DOS max" flag.</li>
-        <li><strong>Capacity is a hard limit.</strong> On hand + the order never exceeds the shop's configured capacity for the product. For <strong>bulk</strong> this is always true — there is nowhere for extra quarts to go.</li>
+        <li><strong>Capacity is a hard limit.</strong> On hand + the order never exceeds the shop's configured capacity for the product. For <strong>bulk</strong> this is always true — there is nowhere for extra quarts to go. When capacity is what stops a bulk order short of the DOS target, the line is flagged "Bulk: ordered to capacity" (next to DOS After) with how much was needed in the note.</li>
         <li>The one exception: for <strong>package</strong> product, a vendor can opt in (toggle on the Shared tab) to ordering past capacity to reach the target. Those lines are flagged "Over capacity: DOS target" with the real numbers in the note.</li>
         <li><strong>Drums</strong> are ordered 1 per product, however many the target calls for — the note reads "ordering 1 but N needed for dos target".</li>
         <li>Bulk quantities round to the nearest <Setting>{s.bulk_rounding_increment} gal</Setting>; cases, drums and bay boxes are always whole units.</li>
@@ -122,7 +122,7 @@ export function OrderLogicTab({ settings: s }: { settings: OrderSettings }) {
 
       <Rule step="2d" title="Critical minimum & products with no usage" summary="A product with no usage is only ever ordered because it hit its critical minimum — and then only one case."
         flags={['critical_minimum']}>
-        <li><strong>Usage is 0 and on hand is at or below the critical minimum → order exactly 1 case.</strong> No more.</li>
+        <li><strong>Usage is 0 and on hand is at or below the critical minimum → order exactly 1 case.</strong> No more. (Bulk is the exception: a vendor won't ship 1 gallon, so a bulk product at its critical minimum orders the full per-product minimum, e.g. 55 gallons.)</li>
         <li>That line is never topped up by smoothing, the case-type minimum, or any other rule that adds quantity.</li>
         <li><strong>No usage and above the critical minimum → not ordered</strong>, and never pulled onto an order to help reach a minimum.</li>
         <li>A product with usage that is at or below its critical minimum is sized normally (target math above), with at least 1 unit.</li>

@@ -205,6 +205,24 @@ describe('bulk critical minimum meets the per-product floor (2026-10-09)', () =>
   })
 })
 
+describe('bulk ordered to capacity (2026-10-09)', () => {
+  const settings = { ...DEFAULT_ORDER_SETTINGS, days_of_supply_min_trigger: 100, days_of_supply_max: 500, days_of_supply_target: 60 }
+  const vendor = { vendor_id: 'V1', caseTypeMinimums: {}, usesOrderDays: false, minimums: { bulk: { type: 'dollars' as const, dollars: 0, qty: null } } }
+  it('flags a bulk line whose quantity is held down by the tank capacity, with how much was needed', () => {
+    // on_hand 20 qt, 5 qt/day, 60-day target -> 70 gal wanted; capacity 100 qt leaves room for only 20 gal
+    const a = input({ on_hand: 20, daily_usage: 5, rule: { uom: 'bulk', units_per_uom_gallons: 4, unit_cost: 4, max_capacity_gallons: 100 } })
+    const res = generateOrder([a], ctx({ settings, vendor }))
+    expect(res.lines[0].qty).toBe(20)
+    expect(res.lines[0].flags).toContain('bulk_capacity_limited')
+    expect(res.lines[0].note).toMatch(/Ordered 20 to fill the tank - 70 needed/)
+  })
+  it('does not flag a bulk line when capacity has room for the whole target', () => {
+    const a = input({ on_hand: 20, daily_usage: 5, rule: { uom: 'bulk', units_per_uom_gallons: 4, unit_cost: 4, max_capacity_gallons: 1000 } })
+    const res = generateOrder([a], ctx({ settings, vendor }))
+    expect(res.lines[0].flags).not.toContain('bulk_capacity_limited')
+  })
+})
+
 describe('vendor case-type minimums', () => {
   it('tops the order up to at least the case-type minimum across products', () => {
     // DOS 12 with a target of 13 => 1 bay box due on each product, 2 in total.

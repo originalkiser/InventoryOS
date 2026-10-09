@@ -1070,6 +1070,11 @@ export function generateOrder(rawInputs: GenerationInput[], ctx: GenerationConte
     }
     const line = buildLine(input, ctx, units, caps)
     if (belowCriticalFloor && !line.flags.includes('critical_minimum')) line.flags.push('critical_minimum')
+    // Bulk goes into a fixed tank, so when capacity (not the soft DOS max) is what stopped the order short of the DOS target, say so.
+    if (resolvedOrderType(rule) === 'bulk' && caps.capacityBound && want > caps.maxUnits && !belowCriticalFloor) {
+      if (!line.flags.includes('bulk_capacity_limited')) line.flags.push('bulk_capacity_limited')
+      line.note = `Ordered ${units} to fill the tank - ${Math.round(want * 10) / 10} needed to reach the ${ctx.settings.days_of_supply_target}-day target`
+    }
     if (exceedsCapacityForTarget) {
       const per = gallonsPerUnit(rule)
       const finalQuarts = n(input.on_hand) + units * per

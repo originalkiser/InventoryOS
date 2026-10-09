@@ -59,6 +59,7 @@ export const FLAG_META: Record<LineFlag, { label: string; tone: 'red' | 'orange'
   case_minimum_topup: { label: 'Case min', tone: 'sky', title: 'Raised to meet the vendor case-type order minimum' },
   repeat_ordering: { label: 'Repeat ordering', tone: 'red', title: 'A lot of supply has already been ordered for this product recently and it still reads low — on-hand may not be reflecting deliveries' },
   over_dos_max: { label: 'Over DOS max', tone: 'orange', title: 'Pushed past the soft days-of-supply ceiling to reach an order minimum' },
+  bulk_capacity_limited: { label: 'Bulk: ordered to capacity', tone: 'orange', title: 'The bulk quantity is limited by the tank capacity, so it cannot reach the DOS target (see the note)' },
   drum_capped: { label: 'Drum capped', tone: 'orange', title: 'Drums are ordered 1 per product — more are needed to reach the DOS target (see the note)' },
   no_products_to_meet_min: { label: 'No products to add', tone: 'red', title: 'Still under the order minimum and there were no other products to add to meet it' },
   hm0806_solo_min: { label: 'HM0806 Solo Min', tone: 'purple', title: 'HM0806 was the only product due at this shop, so it was ordered at its 2-unit minimum and the order minimum was ignored' },

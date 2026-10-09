@@ -353,6 +353,7 @@ export type LineFlag =
   | 'po_decision_override'   // user chose: order the full suggested qty anyway
   | 'po_decision_exclude'    // user chose: the open PO covers it, don't order more
   | 'po_decision_combine'    // user chose: factor the open PO's outstanding qty into on-hand and re-target
+  | 'bulk_capacity_limited'  // bulk only: the quantity was limited by the tank's capacity, so the DOS target couldn't be reached - see GeneratedLine.note
   | 'rounded_to_bulk_minimum' // bulk per-product minimum: raised to the drum minimum, see GeneratedLine.note for the real calculated amount
   | 'drum_capped'            // a drum product: ordering 1 even though more are needed for the DOS target — see GeneratedLine.note
   | 'no_products_to_meet_min' // still under the order minimum and smoothing found nothing more to add — see GeneratedLine.note

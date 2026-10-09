@@ -482,7 +482,17 @@ export function OrdersV2ReviewTable({
       }),
       col.accessor('dos_after', {
         id: 'dos_after', header: 'DOS After', meta: dosMeta((l) => l.dos_after ?? null),
-        cell: (i) => <DosCell v={i.getValue()} thresholds={thresholds} style={dosStyle} />,
+        // The after-order DOS flags (still low / below target / over max) and the bulk-capacity one read right next to the number.
+        cell: (i) => {
+          const { after } = tagsOf(i.row.original)
+          const dosTags = after.filter((t) => t.key === 'dos_after_low' || t.key === 'dos_after_below_target' || t.key === 'over_dos_max' || t.key === 'bulk_capacity_limited')
+          return (
+            <div className="flex items-center gap-1.5">
+              {iconStrip(dosTags)}
+              <div className="ml-auto"><DosCell v={i.getValue()} thresholds={thresholds} style={dosStyle} /></div>
+            </div>
+          )
+        },
       }),
       col.accessor('dos_after_delivery', {
         id: 'dos_at_delivery', header: 'DOS @ Delivery', enableSorting: false, meta: numericMeta,
