@@ -623,16 +623,16 @@ export function PublicTankPage() {
     if (error) { toast.error(error.message); void load() }
   }
 
-  if (status === 'loading') return <div className="min-h-screen bg-cream flex items-center justify-center"><SbLoader size={40} /></div>
+  if (status === 'loading') return <div className="min-h-screen bg-page flex items-center justify-center"><SbLoader size={40} /></div>
   if (status === 'notfound') return (
-    <div className="min-h-screen bg-cream flex items-center justify-center p-6 text-center">
+    <div className="min-h-screen bg-page flex items-center justify-center p-6 text-center">
       <div><h1 className="text-lg font-heading font-bold text-navy">Link not found</h1><p className="text-sm font-mono text-navy/75 mt-1">This tank link is no longer active. Ask your manager for a new one.</p></div>
     </div>
   )
 
   const address = [shop?.address, [shop?.city, shop?.state].filter(Boolean).join(', '), shop?.zip].filter(Boolean).join(' · ')
   return (
-    <div className="min-h-screen bg-cream text-navy">
+    <div className="min-h-screen bg-page text-navy">
       {/* "Tank Calculator" and the shop stay at the top of the screen; the address scrolls away. (The sticky bar is a direct child of the page — inside a short header it would unstick as soon as the header scrolled off.) */}
       <div className="sticky top-0 z-30 bg-[#002745] text-[#F2F1E6] px-4 pt-3 pb-2">
         <div className="max-w-6xl mx-auto">

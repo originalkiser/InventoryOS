@@ -14,7 +14,7 @@ import { Button } from '@/components/ui'
 // itself found no matching route.
 export function NotFoundPage() {
   return (
-    <div className="min-h-screen bg-cream flex items-center justify-center font-body px-6">
+    <div className="min-h-screen bg-page flex items-center justify-center font-body px-6">
       <div className="flex flex-col items-center text-center gap-4 max-w-sm">
         <img src={sbDroplet} alt="" className="w-16 h-auto opacity-90" />
         <div className="flex flex-col gap-1">

@@ -24,7 +24,7 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
   const isPlaceholder = import.meta.env.VITE_SUPABASE_URL?.includes('placeholder')
   if (!isPlaceholder && !initialized) {
     return (
-      <div className="min-h-screen bg-cream flex items-center justify-center">
+      <div className="min-h-screen bg-page flex items-center justify-center">
         <SbLoader />
       </div>
     )
@@ -179,7 +179,7 @@ function FzMenuApp() {
 export default function App() {
   if (SUPABASE_MISSING) {
     return (
-      <div className="min-h-screen bg-cream flex items-center justify-center font-body p-8">
+      <div className="min-h-screen bg-page flex items-center justify-center font-body p-8">
         <div className="max-w-md w-full bg-cream border border-[#C0392B]/40 rounded-xl p-6 flex flex-col gap-3 shadow-sm">
           <div className="text-[#C0392B] text-sm font-heading font-bold uppercase tracking-wide">Configuration Error</div>
           <p className="text-navy text-xs leading-relaxed font-body">

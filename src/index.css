@@ -145,12 +145,19 @@ html[data-font='plain'] {
 /* Proportional text keeps table digits lined up. */
 html[data-font='clean'] body, html[data-font='plain'] body { font-variant-numeric: tabular-nums; }
 
-/* Brand colour tokens — light mode */
+/* Brand colour tokens — light mode.
+   Two color themes (Profile → Appearance → Colors, useColorTheme): "sb26" (default, from the SB design concepts) and "legacy" (the
+   original look, kept in case the new one misbehaves on some page). Both define the same tokens; the html[data-colors="legacy"]
+   blocks below override this file's defaults. Surfaces are layered: page (--color-page) < card (--color-cream, what bg-cream paints)
+   < pop (menus / popovers) with soft for hover and quiet fills. */
 :root {
   --color-navy:  0 39 69;      /* #002745 */
   --color-inky:  79 116 137;   /* #4F7489 */
   --color-sky:   183 224 222;  /* #B7E0DE */
-  --color-cream: 242 241 230;  /* #F2F1E6 */
+  --color-cream: 251 250 243;  /* #FBFAF3 — card surface (page is --color-page) */
+  --color-page:  242 241 230;  /* #F2F1E6 */
+  --color-pop:   255 255 255;  /* #FFFFFF */
+  --color-soft:  232 231 216;  /* #E8E7D8 */
   /* App chrome (Sidebar/TopBar) — kept as its own token (not folded back
      into the literal hex it replaced) in case a future light-mode variant
      is wanted again, but for now deliberately identical to .dark's values
@@ -164,13 +171,32 @@ html[data-font='clean'] body, html[data-font='plain'] body { font-variant-numeri
 
 /* Dark mode — flip content colours; structural dark elements use literal hex */
 .dark {
-  --color-navy:  196 218 230;  /* #C4DAE6 — light blue-grey for text */
-  --color-cream: 10 24 38;     /* #0A1826 — very dark navy bg */
-  --color-inky:  106 154 178;  /* #6A9AB2 — mid-tone for secondary text */
+  --color-navy:  242 241 230;  /* #F2F1E6 — cream text, high contrast on the dark surfaces */
+  --color-cream: 2 40 71;      /* #022847 — card surface */
+  --color-page:  0 26 47;      /* #001A2F — page */
+  --color-pop:   5 48 79;      /* #05304F */
+  --color-soft:  3 51 86;      /* #033356 */
+  --color-inky:  143 184 200;  /* #8FB8C8 — secondary text, ~7:1 on the card surface */
   /* sky stays the same (#B7E0DE) — works as accent on both backgrounds */
   --chrome-bg: 0 39 69;       /* #002745 — same as :root's, chrome doesn't flip */
   --chrome-fg: 242 241 230;   /* #F2F1E6 */
   color-scheme: dark;
+}
+
+/* Legacy colors — the original palette, selected in Profile → Appearance → Colors. */
+html[data-colors='legacy'] {
+  --color-cream: 242 241 230;
+  --color-page:  242 241 230;
+  --color-pop:   255 255 255;
+  --color-soft:  232 231 216;
+}
+html.dark[data-colors='legacy'] {
+  --color-navy:  196 218 230;
+  --color-cream: 10 24 38;
+  --color-page:  10 24 38;
+  --color-pop:   13 42 68;
+  --color-soft:  6 17 29;
+  --color-inky:  106 154 178;
 }
 
 /* Hide native scrollbar on the app shell's main scroll container */
@@ -206,7 +232,7 @@ html[data-font='clean'] body, html[data-font='plain'] body { font-variant-numeri
 
 body {
   margin: 0;
-  background-color: rgb(var(--color-cream));
+  background-color: rgb(var(--color-page));
   color: rgb(var(--color-navy));
   font-family: var(--font-body);
 }

@@ -101,7 +101,7 @@ export function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen bg-cream flex items-center justify-center font-body">
+    <div className="min-h-screen bg-page flex items-center justify-center font-body">
       <div className="w-full max-w-sm">
         <div className={[
           'text-center overflow-hidden transition-all duration-500',

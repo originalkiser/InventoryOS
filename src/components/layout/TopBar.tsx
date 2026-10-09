@@ -9,6 +9,7 @@ import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/authStore'
 import { useDarkMode } from '@/hooks/useDarkMode'
 import { useFontGroup } from '@/hooks/useFontGroup'
+import { useColorTheme } from '@/hooks/useColorTheme'
 import { useLocations } from '@/hooks/useLocations'
 import { useLocationExclusions } from '@/hooks/useLocationExclusions'
 import { useNotifications, NOTIF_PROMPT_DISMISSED_KEY, type NotifType } from '@/hooks/useNotifications'
@@ -144,6 +145,7 @@ export function TopBar({
   const { profile } = useAuthStore()
   useDarkMode() // keep dark-mode class applied
   useFontGroup() // keep the user's font group applied
+  useColorTheme() // keep the user's color theme applied
   useRecentPagesTracking() // records route visits + owns the Alt+Left/Right hotkeys
   const { locations } = useLocations()
   const { isExcluded } = useLocationExclusions()

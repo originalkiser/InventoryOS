@@ -93,7 +93,7 @@ export function PublicFranchiseSetupPage() {
   }
 
   return (
-    <div className="min-h-screen bg-cream py-6 px-3">
+    <div className="min-h-screen bg-page py-6 px-3">
       <div className="max-w-[1000px] mx-auto flex flex-col gap-4">
         <div>
           <h1 className="text-lg font-heading font-bold text-navy uppercase tracking-wide">Franchise Menu Board Setup</h1>

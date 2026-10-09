@@ -42,7 +42,7 @@ export function ResetPasswordPage() {
   }
 
   return (
-    <div className="min-h-screen bg-cream flex items-center justify-center font-mono">
+    <div className="min-h-screen bg-page flex items-center justify-center font-mono">
       <div className="w-full max-w-sm">
         <div className="mb-8 text-center">
           <div className="text-2xl font-bold text-inky tracking-widest uppercase mb-1">

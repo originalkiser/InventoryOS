@@ -93,7 +93,7 @@ function SmartRedirect() {
 
   if ((isDeptUser && allowedSections === null) || !homeLoaded) {
     return (
-      <div className="min-h-screen bg-cream flex items-center justify-center">
+      <div className="min-h-screen bg-page flex items-center justify-center">
         <SbLoader />
       </div>
     )

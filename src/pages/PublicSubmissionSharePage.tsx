@@ -133,7 +133,7 @@ export function PublicSubmissionSharePage() {
   }
 
   if (status === 'loading') {
-    return <div className="min-h-screen bg-cream flex items-center justify-center"><SbLoader size={40} /></div>
+    return <div className="min-h-screen bg-page flex items-center justify-center"><SbLoader size={40} /></div>
   }
   if (status === 'not_found') {
     return (
@@ -157,7 +157,7 @@ export function PublicSubmissionSharePage() {
   }
 
   return (
-    <div className="min-h-screen bg-cream py-8 px-4">
+    <div className="min-h-screen bg-page py-8 px-4">
       <div className="max-w-6xl mx-auto flex flex-col gap-4">
         <div className="flex items-center gap-3 flex-wrap">
           <h1 className="flex-1 text-sm font-heading font-bold text-navy">{formTitle} — Results{shareLabel ? ` (${shareLabel})` : ''}</h1>

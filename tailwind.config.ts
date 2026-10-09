@@ -11,6 +11,10 @@ const config: Config = {
         inky:  'rgb(var(--color-inky) / <alpha-value>)',
         sky:   'rgb(var(--color-sky)  / <alpha-value>)',
         cream: 'rgb(var(--color-cream) / <alpha-value>)',
+        // Surface layers (see index.css): page < card (`cream`) < pop (menus, popovers) and soft (hover / quiet fills).
+        page:  'rgb(var(--color-page) / <alpha-value>)',
+        pop:   'rgb(var(--color-pop) / <alpha-value>)',
+        soft:  'rgb(var(--color-soft) / <alpha-value>)',
         onyx:  '#000000',
         // App chrome (Sidebar/TopBar) — sky-blue bg/dark text in light mode,
         // the original always-dark navy bg/cream text under .dark. See

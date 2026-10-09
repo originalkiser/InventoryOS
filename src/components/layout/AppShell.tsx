@@ -184,7 +184,7 @@ export function AppShell() {
   ].filter((f) => enabledFabs.includes(f.key))
 
   return (
-    <div className="flex h-screen overflow-hidden bg-cream font-body">
+    <div className="flex h-screen overflow-hidden bg-page font-body">
       <Sidebar
         collapsed={sidebarCollapsed}
         onToggleCollapsed={() => setSidebarCollapsed((v) => !v)}
