@@ -6,6 +6,7 @@ import { usePinnedPanelStore } from '@/stores/pinnedPanelStore'
 import { useDarkMode } from '@/hooks/useDarkMode'
 import { FONT_GROUPS, useFontGroup } from '@/hooks/useFontGroup'
 import { COLOR_THEMES, useColorTheme } from '@/hooks/useColorTheme'
+import { NAV_LAYOUTS, useNavAccordion, useNavLayout } from '@/hooks/useNavLayout'
 import { useProfilePref } from '@/hooks/useProfilePrefs'
 import { useDeptAccess } from '@/hooks/useDeptAccess'
 import { useAppSetting } from '@/hooks/useAppSetting'
@@ -63,6 +64,8 @@ export function ProfilePanel({ onClose, canNotify, permission, notifPrefs, setNo
   const { dark, toggle } = useDarkMode()
   const { group: fontGroup, setGroup: setFontGroup } = useFontGroup()
   const { theme: colorTheme, setTheme: setColorTheme } = useColorTheme()
+  const { layout: navLayout, setLayout: setNavLayout } = useNavLayout()
+  const [navAccordion, setNavAccordion] = useNavAccordion()
   const isAdmin = isAdminOrDeveloper(profile?.role)
   const isDev = isDeveloper(profile?.role)
   const allowedSections = useDeptAccess()
@@ -220,6 +223,25 @@ export function ProfilePanel({ onClose, canNotify, permission, notifPrefs, setNo
                     dark ? 'translate-x-[18px]' : 'translate-x-0.5',
                   ].join(' ')} />
                 </button>
+              </div>
+              <div className="mt-3">
+                <div className="text-sm font-body text-navy dark:text-[#F2F1E6] mb-1.5">Navigation</div>
+                <div className="flex flex-col gap-1">
+                  {NAV_LAYOUTS.map((g) => (
+                    <label key={g.id} className="flex items-start gap-2 cursor-pointer">
+                      <input type="radio" name="nav-layout" className="mt-1 accent-sky" checked={navLayout === g.id} onChange={() => setNavLayout(g.id)} />
+                      <span className="flex flex-col">
+                        <span className="text-xs font-body text-navy dark:text-[#F2F1E6]">{g.label}</span>
+                        <span className="text-[10px] font-body text-navy/60 dark:text-[#F2F1E6]/70">{g.sample}</span>
+                      </span>
+                    </label>
+                  ))}
+                  <label className={`flex items-center gap-2 cursor-pointer mt-1 ${navLayout === 'sidebar' ? '' : 'opacity-50'}`}>
+                    <input type="checkbox" className="accent-sky" checked={navAccordion} onChange={(e) => setNavAccordion(e.target.checked)} />
+                    <span className="text-xs font-body text-navy dark:text-[#F2F1E6]">Sidebar: keep one section open at a time</span>
+                  </label>
+                  <span className="text-[10px] font-body text-navy/60 dark:text-[#F2F1E6]/70">Ctrl K searches pages and actions in any layout. Phones always use the sidebar drawer.</span>
+                </div>
               </div>
               <div className="mt-3">
                 <div className="text-sm font-body text-navy dark:text-[#F2F1E6] mb-1.5">Colors</div>

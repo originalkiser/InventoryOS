@@ -192,6 +192,12 @@ export function refreshNavBadges() {
 }
 
 // Per-key badge count (triggers the load). inventory-alerts merges the alerts store.
+/** Total of the badges on a set of nav items (a section header shows this while it is folded shut). */
+export function useNavBadgeSum(keys: string[]): number {
+  const alert = useInventoryAlertsStore((s) => s.derivedCount)
+  return useNavBadgesStore((s) => keys.reduce((t, k) => t + (k === 'inventory-alerts' ? alert : (s.counts[k] ?? 0)), 0))
+}
+
 export function useNavBadge(key: string): number {
   const { profile } = useAuthStore()
   const companyId = profile?.company_id ?? null

@@ -5,6 +5,10 @@ import { BiCalendarPlus } from 'react-icons/bi'
 import { Sidebar, SECTION_ITEMS, QUICK_FAB_DEFAULT, type QuickFabPosition } from './Sidebar'
 import { QuickAccessBar, type QuickAccessItem } from './QuickAccessBar'
 import { TopBar } from './TopBar'
+import { MegaNav } from './MegaNav'
+import { NavDock } from './NavDock'
+import { NavPalette } from './NavSearch'
+import { useNavLayout } from '@/hooks/useNavLayout'
 import { InventoryNavBar } from '@/components/inventory/InventoryNavBar'
 import { useProfilePref } from '@/hooks/useProfilePrefs'
 import { useNavBadge } from '@/hooks/useNavBadges'
@@ -51,6 +55,17 @@ export function AppShell() {
   const lastTasks = useRef<Exclude<PanelMode, 'hidden'>>(tasksMode === 'docked' ? 'docked' : 'floating')
   const lastMeeting = useRef<Exclude<PanelMode, 'hidden'>>(meetingMode === 'docked' ? 'docked' : 'floating')
   const location = useLocation()
+  const { layout: navLayoutPref } = useNavLayout()
+  // Phones always get the sidebar drawer; the mega menu and floating dock are desktop layouts.
+  const navLayout = mobile ? 'sidebar' : navLayoutPref
+  const [paletteOpen, setPaletteOpen] = useState(false)
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); setPaletteOpen((o) => !o) } }
+    const open = () => setPaletteOpen(true)
+    window.addEventListener('keydown', key)
+    window.addEventListener('sb-open-palette', open)
+    return () => { window.removeEventListener('keydown', key); window.removeEventListener('sb-open-palette', open) }
+  }, [])
 
   // A swipe on the page content itself, but only for navigation through the
   // Recent Pages widget/hotkeys (lastCycleNav lands on this exact path
@@ -166,7 +181,7 @@ export function AppShell() {
   // comment for why a tiny shared store instead of prop drilling.
   useEffect(() => { usePinnedPanelStore.getState().setDockedWidth(pushWidth) }, [pushWidth])
   // w-14 collapsed (56px), w-64 expanded (256px)
-  const sidebarWidth = mobile ? 0 : sidebarCollapsed ? 56 : 256
+  const sidebarWidth = mobile || navLayout !== 'sidebar' ? 0 : sidebarCollapsed ? 56 : 256
 
   // Show the inventory quick-nav bar on inventory-section routes — except the
   // Dashboard, which has its own large shortcut buttons.
@@ -185,13 +200,15 @@ export function AppShell() {
 
   return (
     <div className="flex h-screen overflow-hidden bg-page font-body">
-      <Sidebar
-        collapsed={sidebarCollapsed}
-        onToggleCollapsed={() => setSidebarCollapsed((v) => !v)}
-        mobile={mobile}
-        mobileOpen={mobileNavOpen}
-        onMobileClose={() => setMobileNavOpen(false)}
-      />
+      {navLayout === 'sidebar' && (
+        <Sidebar
+          collapsed={sidebarCollapsed}
+          onToggleCollapsed={() => setSidebarCollapsed((v) => !v)}
+          mobile={mobile}
+          mobileOpen={mobileNavOpen}
+          onMobileClose={() => setMobileNavOpen(false)}
+        />
+      )}
 
       <div className="flex flex-col flex-1 min-w-0 relative">
         <div ref={topBarRef}>
@@ -208,6 +225,7 @@ export function AppShell() {
             onOpenTasks={openTasks}
             quickAccessSlot={!mobile && fabPosition === 'topbar-left' ? <QuickAccessBar variant="topbar" items={quickAccessItems} /> : null}
           />
+          {navLayout === 'mega' && <MegaNav />}
         </div>
         {/* Only the scrollable content area shifts right for docked panels —
             TopBar always spans full width above the panel. */}
@@ -223,6 +241,9 @@ export function AppShell() {
           <div className="h-16" />
         </div>
       </div>
+
+      {navLayout === 'dock' && <NavDock />}
+      <NavPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
 
       {/* Quick-access FABs — always available on desktop now that the in-sidebar
           grid is gone. Bottom-right (default) or bottom-left, per the position

@@ -16,6 +16,7 @@ import { useProfilePref } from '@/hooks/useProfilePrefs'
 import { isAdminOrDeveloper } from '@/lib/roles'
 import { SbLoader } from '@/components/ui'
 import { DashboardPage } from '@/pages/Dashboard'
+import HomePage from '@/modules/home/HomePage'
 import { ConfigPage } from '@/modules/config/ConfigPage'
 import { GlobalConfigPage } from '@/modules/config/GlobalConfigPage'
 import { DataConnectionsPage } from '@/modules/config/DataConnectionsPage'
@@ -119,6 +120,7 @@ function RequireAdminOrDev({ children }: { children: React.ReactNode }) {
 export const APP_ROUTE_ELEMENTS = (
   <>
     <Route index element={<SmartRedirect />} />
+    <Route path="home" element={<HomePage />} />
     <Route path="dashboard" element={<DashboardPage />} />
     <Route path="config" element={<ConfigPage />} />
     <Route path="global-config" element={<GlobalConfigPage />} />

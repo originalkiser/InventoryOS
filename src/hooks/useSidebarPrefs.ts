@@ -52,6 +52,7 @@ interface State extends SidebarPrefs {
   load: (userId: string) => void
   setSectionOrder: (v: string[]) => void
   toggleSection: (key: string) => void
+  openOnlySection: (key: string, allKeys: string[]) => void
   toggleFavorite: (key: string) => void
   setFavoritesOrder: (v: string[]) => void
   setUtilityNavOrder: (v: string[]) => void
@@ -86,6 +87,7 @@ const useStore = create<State>((set, get) => ({
   },
   setSectionOrder: (sectionOrder) => { set({ sectionOrder }); const u = get().userId; if (u) upsertPrefs(u, { section_order: sectionOrder }) },
   toggleSection: (key) => { const sectionCollapsed = { ...get().sectionCollapsed, [key]: !get().sectionCollapsed[key] }; set({ sectionCollapsed }); const u = get().userId; if (u) upsertPrefs(u, { section_collapsed: sectionCollapsed }) },
+  openOnlySection: (key, allKeys) => { const sectionCollapsed = { ...get().sectionCollapsed }; for (const k of allKeys) sectionCollapsed[k] = k !== key; set({ sectionCollapsed }); const u = get().userId; if (u) upsertPrefs(u, { section_collapsed: sectionCollapsed }) },
   toggleFavorite: (itemKey) => { const cur = get().favorites; const favorites = cur.includes(itemKey) ? cur.filter((k) => k !== itemKey) : [...cur, itemKey]; set({ favorites }); const u = get().userId; if (u) upsertPrefs(u, { favorites }) },
   setFavoritesOrder: (favorites) => { set({ favorites }); const u = get().userId; if (u) upsertPrefs(u, { favorites }) },
   setUtilityNavOrder: (utilityNavOrder) => { set({ utilityNavOrder }); const u = get().userId; if (u) upsertPrefs(u, { utility_nav_order: utilityNavOrder }) },
@@ -102,9 +104,10 @@ export function useSidebarPrefs() {
   const utilityNavOrder = useStore((s) => s.utilityNavOrder)
   const setSectionOrder = useStore((s) => s.setSectionOrder)
   const toggleSection = useStore((s) => s.toggleSection)
+  const openOnlySection = useStore((s) => s.openOnlySection)
   const toggleFavorite = useStore((s) => s.toggleFavorite)
   const setFavoritesOrder = useStore((s) => s.setFavoritesOrder)
   const setUtilityNavOrder = useStore((s) => s.setUtilityNavOrder)
   const setItemOrder = useStore((s) => s.setItemOrder)
-  return { sectionOrder, sectionCollapsed, itemOrder, favorites, utilityNavOrder, setSectionOrder, toggleSection, toggleFavorite, setFavoritesOrder, setUtilityNavOrder, setItemOrder }
+  return { sectionOrder, sectionCollapsed, itemOrder, favorites, utilityNavOrder, setSectionOrder, toggleSection, openOnlySection, toggleFavorite, setFavoritesOrder, setUtilityNavOrder, setItemOrder }
 }

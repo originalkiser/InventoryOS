@@ -412,6 +412,13 @@ body {
   animation: ov2-start-order-trace 3.25s ease-in-out infinite;
 }
 
+/* Navigation layouts: mega-menu cards cascade in and the panel drops open; the floating dock's icons pop in and its fan cards emerge from the icon. */
+@keyframes sbCascade { from { opacity: 0; transform: translateY(-10px) } to { opacity: 1; transform: none } }
+@keyframes sbReveal { from { opacity: 0; clip-path: inset(0 0 100% 0) } to { opacity: 1; clip-path: inset(0 0 0 0) } }
+@keyframes sbPopIn { from { opacity: 0; transform: scale(0.3) } to { opacity: 1; transform: none } }
+@keyframes sbEmerge { from { opacity: 0; transform: translate(var(--dx), var(--dy)) scale(0.2) } 55% { opacity: 1 } to { opacity: 1; transform: none } }
+@media (prefers-reduced-motion: reduce) { [class*='animate-[sbCascade'], [class*='animate-[sbReveal'], [class*='animate-[sbPopIn'], [class*='animate-[sbEmerge'] { animation: none !important } }
+
 /* Sidebar section item drop-in animation */
 @keyframes sb-drop-in {
   from { opacity: 0; transform: translateY(-10px); }

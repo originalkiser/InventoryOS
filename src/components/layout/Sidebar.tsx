@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef, useMemo, useContext, createContext } from 'react'
 import { createPortal } from 'react-dom'
-import { NavLink } from 'react-router-dom'
+import { NavLink, useLocation } from 'react-router-dom'
 import { useInventoryAlerts } from '@/hooks/useInventoryAlerts'
-import { useNavBadge } from '@/hooks/useNavBadges'
+import { useNavBadge, useNavBadgeSum } from '@/hooks/useNavBadges'
 import {
   DndContext,
   closestCenter,
@@ -41,72 +41,14 @@ import {
 import { BiRuler, BiSpreadsheet, BiAbacus, BiCommentError, BiUserVoice } from 'react-icons/bi'
 import { GrDatabase, GrMap } from 'react-icons/gr'
 
-// ── Icons ──────────────────────────────────────────────────────────────────
+import { ICONS, SECTION_ICONS } from './navIcons'
+import { NavResultList, NavSearchInput, useNavSearch } from './NavSearch'
+import { HOME_ITEM, useNavModel } from './useNavModel'
+import { SECTION_ITEMS, SECTION_META, UTILITY_ITEMS, ASSIGNABLE_SECTIONS, type NavItem } from './navData'
 
-export const ICONS: Record<string, JSX.Element> = {
-  dashboard: <LayoutDashboard className="w-4 h-4 flex-shrink-0" />,
-  'on-hand': <Package className="w-4 h-4 flex-shrink-0" />,
-  monthend: <BiAbacus className="w-4 h-4 flex-shrink-0" />,
-  weekly: <CalendarDays className="w-4 h-4 flex-shrink-0" />,
-  orders: <ClipboardList className="w-4 h-4 flex-shrink-0" />,
-  'orders-v2': <BiSpreadsheet className="w-4 h-4 flex-shrink-0" />,
-  config: <Settings className="w-4 h-4 flex-shrink-0" />,
-  'global-config': <Database className="w-4 h-4 flex-shrink-0" />,
-  outlier: <BarChart2 className="w-4 h-4 flex-shrink-0" />,
-  'outlier-am': <Users className="w-4 h-4 flex-shrink-0" />,
-  'outlier-leadership': <TrendingUp className="w-4 h-4 flex-shrink-0" />,
-  projects: <FolderKanban className="w-4 h-4 flex-shrink-0" />,
-  calendar: <CalendarDays className="w-4 h-4 flex-shrink-0" />,
-  issues: <AlertTriangle className="w-4 h-4 flex-shrink-0" />,
-  meetings: <MessageSquare className="w-4 h-4 flex-shrink-0" />,
-  'feature-requests': <Lightbulb className="w-4 h-4 flex-shrink-0" />,
-  tasks: <CheckCircle2 className="w-4 h-4 flex-shrink-0" />,
-  forms: <FileText className="w-4 h-4 flex-shrink-0" />,
-  users: <Users className="w-4 h-4 flex-shrink-0" />,
-  locations: <MapPin className="w-4 h-4 flex-shrink-0" />,
-  'location-lookup': <MapPin className="w-4 h-4 flex-shrink-0" />,
-  'custom-shop-config': <SlidersHorizontal className="w-4 h-4 flex-shrink-0" />,
-  'am-rd-lookup': <BiUserVoice className="w-4 h-4 flex-shrink-0" />,
-  'tank-monitors': <BiRuler className="w-4 h-4 flex-shrink-0" />,
-  'procurement-deck': <BarChart2 className="w-4 h-4 flex-shrink-0" />,
-  grni: <DollarSign className="w-4 h-4 flex-shrink-0" />,
-  'cogs-price-check': <DollarSign className="w-4 h-4 flex-shrink-0" />,
-  'count-sheet': <ClipboardList className="w-4 h-4 flex-shrink-0" />,
-  'inventory-alerts': <AlertTriangle className="w-4 h-4 flex-shrink-0" />,
-  'exception-reporting': <BiCommentError className="w-4 h-4 flex-shrink-0" />,
-  'location-comms': <MessageSquare className="w-4 h-4 flex-shrink-0" />,
-  'marketing-planner': <Megaphone className="w-4 h-4 flex-shrink-0" />,
-  'customer-heatmap': <GrMap className="w-4 h-4 flex-shrink-0" />,
-  'tank-links': <QrCode className="w-4 h-4 flex-shrink-0" />,
-  'tank-review': <ClipboardList className="w-4 h-4 flex-shrink-0" />,
-  'droptop-orders': <FileText className="w-4 h-4 flex-shrink-0" />,
-  'droptop-vehicles': <Car className="w-4 h-4 flex-shrink-0" />,
-  'droptop-packages': <ClipboardList className="w-4 h-4 flex-shrink-0" />,
-  'package-mapping': <ClipboardList className="w-4 h-4 flex-shrink-0" />,
-  'pricing-audit': <DollarSign className="w-4 h-4 flex-shrink-0" />,
-  'product-sales-history': <BarChart2 className="w-4 h-4 flex-shrink-0" />,
-  'staffing-report': <Users className="w-4 h-4 flex-shrink-0" />,
-  'data-connections': <GrDatabase className="w-4 h-4 flex-shrink-0" />,
-  mmr: <BarChart2 className="w-4 h-4 flex-shrink-0" />,
-  drag: <GripVertical className="w-3 h-3 flex-shrink-0 text-chrome-fg/25" />,
-}
-
-// Deliberately bigger than a subitem's own icon (w-4, see ICONS above) — a
-// section is the parent of everything under it, so its own icon (used both
-// in the full sidebar's section header bar and the collapsed rail's
-// per-section launcher button) should read as a size step up, not smaller.
-const SECTION_ICONS: Record<string, JSX.Element> = {
-  inventory: <Package className="w-5 h-5 flex-shrink-0 text-sky" />,
-  droptop: <img src={droptopLogo} alt="" className="w-5 h-5 flex-shrink-0 object-contain" />,
-  'shop-tools': <Wrench className="w-5 h-5 flex-shrink-0 text-sky" />,
-  reladyne: <img src={reladyneLogo} alt="" className="w-5 h-5 flex-shrink-0 object-contain" />,
-  'data-connections': <GrDatabase className="w-5 h-5 flex-shrink-0 text-sky" />,
-  'global-config': <Settings className="w-5 h-5 flex-shrink-0 text-chrome-fg/70" />,
-  operations: <Building2 className="w-5 h-5 flex-shrink-0 text-[#E67E22]" />,
-  finance: <DollarSign className="w-5 h-5 flex-shrink-0 text-[#2ECC71]" />,
-  accounting: <TrendingUp className="w-5 h-5 flex-shrink-0 text-inky" />,
-  marketing: <Megaphone className="w-5 h-5 flex-shrink-0 text-[#C0392B]" />,
-}
+// Re-exported so existing imports from './Sidebar' keep working.
+export { ICONS, SECTION_ITEMS, ASSIGNABLE_SECTIONS }
+export type { NavItem }
 
 // Subtle per-section tint + colored left accent so the section headers stand
 // apart from each other on the dark sidebar (brand tokens only). Droptop
@@ -136,110 +78,6 @@ const SECTION_ACCENT: Record<string, string> = {
   accounting: 'bg-inky/25 border-l-2 border-inky',
   marketing: 'bg-[#C0392B]/15 border-l-2 border-[#C0392B]',
 }
-
-// ── Nav data ───────────────────────────────────────────────────────────────
-
-export interface NavItem {
-  key: string
-  label: string
-  to: string | null
-}
-
-export const SECTION_ITEMS: Record<string, NavItem[]> = {
-  inventory: [
-    { key: 'dashboard', label: 'Dashboard', to: '/dashboard' },
-    { key: 'on-hand', label: 'On Hand', to: '/on-hand' },
-    { key: 'monthend', label: 'Month End Count', to: '/monthend' },
-    { key: 'weekly', label: 'Weekly Count', to: '/weekly' },
-    { key: 'orders', label: 'Orders', to: '/orders' },
-    { key: 'orders-v2', label: 'Orders v2', to: '/orders-v2' },
-    { key: 'po-status', label: 'Purchase Orders', to: '/po-status' },
-    { key: 'projects', label: 'Projects', to: '/projects' },
-    { key: 'config', label: 'Inventory Config', to: '/config' },
-    { key: 'location-lookup', label: 'Location Lookup', to: '/location-lookup' },
-    { key: 'custom-shop-config', label: 'Custom Shop Config', to: '/custom-shop-config' },
-    { key: 'am-rd-lookup', label: 'AM/RD Lookup', to: '/am-rd-lookup' },
-    { key: 'tank-monitors', label: 'Tank Monitors', to: '/tank-monitors' },
-    { key: 'procurement-deck', label: 'Procurement Deck', to: '/procurement-deck' },
-    { key: 'count-sheet', label: 'Count Sheet', to: '/count-sheet' },
-    { key: 'inventory-alerts', label: 'Inventory Alerts', to: '/inventory-alerts' },
-    { key: 'exception-reporting', label: 'Exception Reporting', to: '/exception-reporting' },
-    { key: 'location-comms', label: 'Location Comms', to: '/location-comms' },
-  ],
-  'shop-tools': [
-    { key: 'tank-links', label: 'Tank Calculator Links', to: '/tank-links' },
-    { key: 'tank-review', label: 'Tank Count Review', to: '/tank-review' },
-  ],
-  droptop: [
-    { key: 'customer-heatmap', label: 'Customer Heatmap', to: '/customer-heatmap' },
-    { key: 'droptop-orders', label: 'Droptop Orders', to: '/droptop-orders' },
-    { key: 'droptop-vehicles', label: 'Vehicles', to: '/droptop-vehicles' },
-    { key: 'droptop-packages', label: 'Packages', to: '/droptop-packages' },
-    { key: 'package-mapping', label: 'Package Mapping', to: '/package-mapping' },
-    { key: 'pricing-audit', label: 'Pricing Audit', to: '/pricing-audit' },
-    { key: 'product-sales-history', label: 'Product Sales History', to: '/product-sales-history' },
-    { key: 'staffing-report', label: 'Staffing Report', to: '/staffing-report' },
-  ],
-  'data-connections': [
-    { key: 'data-connections', label: 'Data Connections', to: '/data-connections' },
-  ],
-  reladyne: [
-    { key: 'mmr', label: 'MMR', to: '/mmr' },
-  ],
-  'global-config': [
-    { key: 'global-config', label: 'Global Config', to: '/global-config' },
-  ],
-  operations: [
-    { key: 'outlier', label: 'Outlier Reporting', to: '/operations/outlier' },
-    { key: 'outlier-am', label: 'AM Dashboard', to: '/operations/outlier/am-dashboard' },
-    { key: 'outlier-leadership', label: 'Leadership', to: '/operations/outlier/leadership' },
-  ],
-  finance: [
-    { key: 'grni', label: 'GRNI', to: '/grni' },
-    { key: 'cogs-price-check', label: 'COGS Price Check', to: '/cogs-price-check' },
-  ],
-  accounting: [{ key: 'accounting-soon', label: 'Coming Soon', to: null }],
-  marketing: [
-    { key: 'marketing-planner', label: 'Marketing Planner', to: '/marketing-planner' },
-    { key: 'menu-board', label: 'Menu Board', to: '/menu-board' },
-  ],
-}
-
-const SECTION_META: Record<string, { label: string }> = {
-  inventory: { label: 'Inventory' },
-  droptop: { label: 'Droptop' },
-  'shop-tools': { label: 'Shop Tools' },
-  'data-connections': { label: 'Data Connections' },
-  reladyne: { label: 'RelaDyne' },
-  'global-config': { label: 'Configuration' },
-  operations: { label: 'Operations' },
-  finance: { label: 'Finance' },
-  accounting: { label: 'Accounting' },
-  marketing: { label: 'Marketing' },
-}
-
-/**
- * Every top-level sidebar section that can be granted to a user through the
- * admin panel — i.e. all of them except `global-config`, which stays
- * admin/developer only. Derived from SECTION_ITEMS so a newly-added section
- * automatically becomes assignable (see UsersPage's ManageUserModal, which
- * also auto-creates the matching platform.departments row on save). The
- * `key` doubles as the department slug and the sidebar section key.
- */
-export const ASSIGNABLE_SECTIONS: { key: string; label: string }[] =
-  Object.keys(SECTION_ITEMS)
-    .filter((k) => k !== 'global-config')
-    .map((k) => ({ key: k, label: SECTION_META[k]?.label ?? k.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) }))
-
-const UTILITY_ITEMS: NavItem[] = [
-  { key: 'calendar', label: 'Calendar', to: '/schedule' },
-  { key: 'tasks', label: 'Tasks', to: '/tasks' },
-  { key: 'issues', label: 'Issues', to: '/issues' },
-  { key: 'meetings', label: 'Meeting Notes', to: '/meetings' },
-  { key: 'forms', label: 'Forms', to: '/forms' },
-  { key: 'locations', label: 'Locations', to: '/locations' },
-  { key: 'feature-requests', label: 'Feature Requests', to: '/feature-requests' },
-]
 
 // ── Sub-components ─────────────────────────────────────────────────────────
 
@@ -367,7 +205,7 @@ function NavItemLink({
   outlined?: boolean
 }) {
   const { rearranging, openMenu } = useContext(RearrangeCtx)
-  const base = 'flex items-center gap-2.5 px-2 py-2 mx-1 rounded text-sm font-heading transition-all duration-100 group'
+  const base = 'relative flex items-center gap-2.5 px-2 py-2 mx-1 rounded-[10px] text-sm font-heading transition-all duration-100 group'
   const badge = useNavBadge(item.key)
   const showBadge = badge > 0 && showLabel
   const showGrip = draggable && rearranging
@@ -405,8 +243,8 @@ function NavItemLink({
             base,
             'flex-1 min-w-0',
             isActive
-              ? 'bg-chrome-fg/10 text-chrome-fg border-b-2 border-sky'
-              : `text-chrome-fg/60 hover:text-chrome-fg hover:bg-chrome-fg/5 ${outlined ? 'border border-chrome-fg/10' : ''}`,
+              ? "bg-chrome-fg/15 text-chrome-fg pl-6 before:content-[''] before:absolute before:left-2 before:top-1/2 before:-mt-1 before:w-2 before:h-2 before:bg-sky before:rotate-45 before:rounded-[0_50%_50%_50%]"
+              : `text-chrome-fg/70 hover:text-chrome-fg hover:bg-chrome-fg/10${outlined ? '' : ''}`,
           ].join(' ')
         }
       >
@@ -564,7 +402,7 @@ function OutlierExpandableItem({
       .then(({ data }: any) => setReports(data ?? []))
   }, [])
 
-  const base = 'flex items-center gap-2.5 px-2 py-2 mx-1 rounded text-sm font-heading transition-all duration-100 group'
+  const base = 'relative flex items-center gap-2.5 px-2 py-2 mx-1 rounded-[10px] text-sm font-heading transition-all duration-100 group'
 
   return (
     <div
@@ -674,6 +512,7 @@ function SortableSection({
   }
   const { rearranging, openSectionMenu } = useContext(RearrangeCtx)
   const meta = SECTION_META[sectionKey]
+  const { pathname } = useLocation()
 
   const baseItems = overrideItems ?? SECTION_ITEMS[sectionKey] ?? []
   const items =
@@ -686,6 +525,8 @@ function SortableSection({
         ]
       : baseItems
 
+  const hasActive = items.some((i) => i.to && (pathname === i.to || pathname.startsWith(`${i.to}/`)))
+  const sectionBadge = useNavBadgeSum(items.map((i) => i.key))
   const prevCollapsedRef = useRef(collapsed)
   const [isOpening, setIsOpening] = useState(false)
   useEffect(() => {
@@ -760,7 +601,7 @@ function SortableSection({
           during that mode, so icon+label sit flush left the rest of the
           time instead of always reserving space for a handle. */}
       <div
-        className={`flex items-center gap-1 px-2 py-2 group/section rounded-r ${SECTION_ACCENT[sectionKey] ?? ''}`}
+        className={`flex items-center gap-1 px-2 py-2 mx-1 group/section rounded-[11px] transition-colors ${sectionKey === 'reladyne' ? SECTION_ACCENT[sectionKey] : (hasActive ? 'bg-chrome-fg/10' : 'hover:bg-chrome-fg/10')}`}
         onContextMenu={(e) => openSectionMenu(e)}
       >
         {rearranging && (
@@ -795,9 +636,12 @@ function SortableSection({
           ) : (
             <>
               {SECTION_ICONS[sectionKey]}
-              <span className="text-[10px] font-heading text-chrome-fg/80 uppercase tracking-widest truncate flex-1">
+              <span className="text-[11px] font-heading font-semibold text-chrome-fg/90 uppercase tracking-[0.14em] truncate flex-1">
                 {meta?.label}
               </span>
+              {collapsed && sectionBadge > 0 && (
+                <span className="flex-shrink-0 rounded-full bg-[#C0392B] text-sb-cream text-[10px] font-mono leading-none px-1.5 py-0.5 min-w-[18px] text-center">{sectionBadge}</span>
+              )}
             </>
           )}
           <ChevronRight
@@ -810,7 +654,8 @@ function SortableSection({
         </button>
       </div>
 
-      {/* Section items — animated slide. A gentle shaded panel (vs. the flat
+      {/* (A-style) children hang off a thin rail under the header.
+          Section items — animated slide. A gentle shaded panel (vs. the flat
           sidebar background) reads as "these are nested under the header
           above them" at a glance, without a hard border. No side margin of
           its own — each row's own `mx-1` (NavItemLink's `base`) is the only
@@ -819,7 +664,7 @@ function SortableSection({
           for no visual benefit and contributing to labels like "Product
           Sales Histo…" clipping. */}
       <div className={['grid transition-[grid-template-rows] duration-500 ease-in-out', collapsed ? 'grid-rows-[0fr]' : 'grid-rows-[1fr]'].join(' ')}>
-        <div className="overflow-hidden rounded-md bg-black/10">
+        <div className="overflow-hidden ml-5 pl-1 border-l border-chrome-fg/25">
           <DndContext
             sensors={sensors}
             collisionDetection={closestCenter}
@@ -1026,25 +871,55 @@ export type QuickFabPosition = 'bottom-right' | 'bottom-left' | 'topbar-left'
 
 // ── Collapsed icon-only view ──────────────────────────────────────────────
 
+function FlyLink({ item, onNavClick }: { item: NavItem; onNavClick?: () => void }) {
+  const badge = useNavBadge(item.key)
+  return (
+    <NavLink
+      to={item.to!}
+      onClick={onNavClick}
+      className={({ isActive }) =>
+        [
+          'relative flex items-center gap-2 rounded-[9px] px-2.5 py-2 text-[13px] font-body transition-colors',
+          isActive
+            ? "bg-chrome-fg/20 text-chrome-fg pl-6 before:content-[''] before:absolute before:left-2 before:top-1/2 before:-mt-1 before:w-2 before:h-2 before:bg-sky before:rotate-45 before:rounded-[0_50%_50%_50%]"
+            : 'text-chrome-fg/85 hover:bg-chrome-fg/10',
+        ].join(' ')
+      }
+    >
+      <span className="flex-1 truncate">{item.label}</span>
+      {badge > 0 && <span className="flex-shrink-0 rounded-full bg-[#C0392B] text-sb-cream text-[10px] font-mono leading-none px-1.5 py-0.5 min-w-[18px] text-center">{badge}</span>}
+    </NavLink>
+  )
+}
+
+function RailSectionButton({ section, active, onEnter, onLeave, onClick }: {
+  section: { key: string; label: string; items: NavItem[] }; active: boolean
+  onEnter: (e: React.MouseEvent | React.FocusEvent) => void; onLeave: () => void; onClick: (e: React.MouseEvent) => void
+}) {
+  const badge = useNavBadgeSum(section.items.map((i) => i.key))
+  return (
+    <button
+      onMouseEnter={onEnter} onMouseLeave={onLeave} onFocus={onEnter} onBlur={onLeave} onClick={onClick}
+      aria-label={section.label} aria-haspopup="menu"
+      className={['relative w-[calc(100%-8px)] flex items-center justify-center py-2.5 mx-1 rounded-[11px] transition-colors', active ? 'bg-chrome-fg/15 text-chrome-fg' : 'text-chrome-fg/70 hover:text-chrome-fg hover:bg-chrome-fg/10'].join(' ')}
+    >
+      {SECTION_ICONS[section.key] ?? ICONS.dashboard}
+      {badge > 0 && <span className="absolute top-0.5 right-1 rounded-full bg-[#C0392B] text-sb-cream text-[9px] font-mono leading-none px-1 py-0.5 min-w-[15px] text-center">{badge}</span>}
+    </button>
+  )
+}
+
 function CollapsedNav({
   onNavClick,
   onToggleCollapsed,
-  onPeekSection,
 }: {
   onNavClick?: () => void
   onToggleCollapsed?: () => void
-  /** Requests a "peek" — temporarily expand the full sidebar with this one
-   * section forced open, so a section that's collapsed in the full view
-   * (and therefore has none of its items shown here at all) still has a
-   * way in from the icon rail. See Sidebar's peekSection state. */
   onPeekSection?: (key: string) => void
 }) {
-  const { profile } = useAuthStore()
-  const isAdmin = isAdminOrDeveloper(profile?.role)
-  const allowedSections = useDeptAccess()
-  const [hiddenSections] = useProfilePref<string[]>('sidebar:hiddenSections', [])
-  const { sectionOrder, sectionCollapsed, favorites } = useSidebarPrefs()
-  // Pinned items stay visible on the collapsed rail too.
+  const { favorites } = useSidebarPrefs()
+  const { sections } = useNavModel()
+  const { pathname } = useLocation()
   const itemByKey = useMemo(() => { const m = new Map<string, NavItem>(); for (const items of Object.values(SECTION_ITEMS)) for (const it of items) m.set(it.key, it); for (const it of UTILITY_ITEMS) m.set(it.key, it); return m }, [])
   const favItems = favorites.map((k) => itemByKey.get(k)).filter((i): i is NavItem => !!i)
   // Mirror the General (utility) section's expanded/pinned state so the collapsed
@@ -1052,20 +927,26 @@ function CollapsedNav({
   const genExpanded = (() => { try { return localStorage.getItem('sb:sc:expanded') !== 'false' } catch { return true } })()
   const genPinned: string[] = (() => { try { return JSON.parse(localStorage.getItem('sb:sc:pinned') || '[]') } catch { return [] } })()
   const shownUtility = genExpanded ? UTILITY_ITEMS : UTILITY_ITEMS.filter((i) => genPinned.includes(i.key))
-  // Hover flyout label — rendered via portal so it escapes the sidebar's clip.
+  // Hover label (icon-only links) and the section flyout — both portaled so the rail's own clipping can't cut them off.
   const [flyout, setFlyout] = useState<{ label: string; top: number } | null>(null)
   const showFlyout = (e: React.MouseEvent, label: string) => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); setFlyout({ label, top: r.top + r.height / 2 }) }
-  const visibleSectionKeys = sectionOrder.filter((k) => {
-    if (hiddenSections.includes(k)) return false
-    if (k === 'global-config') return isAdmin
-    if (allowedSections !== null) return allowedSections.has(k)
-    return true
-  })
+  const [fly, setFly] = useState<{ key: string; top: number } | null>(null)
+  const flyTimer = useRef<number | undefined>(undefined)
+  const openFly = (key: string, e: React.MouseEvent | React.FocusEvent) => {
+    window.clearTimeout(flyTimer.current)
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
+    setFly({ key, top: r.top })
+    setFlyout(null)
+  }
+  const closeFlySoon = () => { window.clearTimeout(flyTimer.current); flyTimer.current = window.setTimeout(() => setFly(null), 180) }
+  const keepFly = () => window.clearTimeout(flyTimer.current)
+  const flySection = fly ? sections.find((x) => x.key === fly.key) : null
   const itemLinkClass = ({ isActive }: { isActive: boolean }) =>
     [
-      'flex items-center justify-center py-2.5 mx-1 rounded transition-all duration-100',
-      isActive ? 'bg-chrome-fg/10 text-chrome-fg' : 'text-chrome-fg/60 hover:text-chrome-fg hover:bg-chrome-fg/5',
+      'flex items-center justify-center py-2.5 mx-1 rounded-[11px] transition-colors',
+      isActive ? 'bg-chrome-fg/15 text-chrome-fg' : 'text-chrome-fg/70 hover:text-chrome-fg hover:bg-chrome-fg/10',
     ].join(' ')
+  const hasActive = (items: NavItem[]) => items.some((i) => i.to && (pathname === i.to || pathname.startsWith(`${i.to}/`)))
 
   return (
     <div className="flex flex-col flex-1 overflow-hidden">
@@ -1074,8 +955,20 @@ function CollapsedNav({
           56px-wide icon rail its 8px width skews flex-centered icons visibly
           left of true center. No scrollbar affordance needed here anyway. */}
       <div className="flex-1 overflow-y-auto app-scroll py-2">
+        <button
+          onClick={() => window.dispatchEvent(new Event('sb-open-palette'))}
+          onMouseEnter={(e) => showFlyout(e, 'Search (Ctrl K)')} onMouseLeave={() => setFlyout(null)}
+          aria-label="Search pages and actions"
+          className="w-[calc(100%-8px)] flex items-center justify-center py-2.5 mx-1 rounded-[11px] text-chrome-fg/70 hover:text-chrome-fg hover:bg-chrome-fg/10 transition-colors"
+        >
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24"><path d="M11 4a7 7 0 100 14 7 7 0 000-14zM21 21l-5-5" /></svg>
+        </button>
+        <NavLink to={HOME_ITEM.to!} onClick={onNavClick} onMouseEnter={(e) => showFlyout(e, 'Home')} onMouseLeave={() => setFlyout(null)} className={itemLinkClass}>
+          {ICONS.home}
+        </NavLink>
         {favItems.length > 0 && (
           <>
+            <div className="mx-2 my-1 border-t border-chrome-fg/10" />
             {favItems.filter((i) => i.to).map((item) => (
               <NavLink
                 key={`fav-${item.key}`}
@@ -1088,20 +981,17 @@ function CollapsedNav({
                 {ICONS[item.key] ?? ICONS.dashboard}
               </NavLink>
             ))}
-            <div className="mx-2 my-1 border-t border-chrome-fg/10" />
           </>
         )}
-        {visibleSectionKeys.map((k) => {
-          // Data Connections bypasses the collapse mechanism entirely in the
-          // full sidebar too (see SortableSection's own special-case) — always
-          // just a plain link here, never a launcher button.
-          if (k === 'data-connections') {
-            const item = SECTION_ITEMS[k]?.[0]
-            if (!item?.to) return null
+        <div className="mx-2 my-1 border-t border-chrome-fg/10" />
+        {sections.map((sec) => {
+          // A section with a single page (Data Connections) is just a link, same as in the full sidebar.
+          if (sec.items.length === 1) {
+            const item = sec.items[0]
             return (
               <NavLink
                 key={item.key}
-                to={item.to}
+                to={item.to!}
                 onClick={onNavClick}
                 onMouseEnter={(e) => showFlyout(e, item.label)}
                 onMouseLeave={() => setFlyout(null)}
@@ -1111,37 +1001,16 @@ function CollapsedNav({
               </NavLink>
             )
           }
-          // A section collapsed in the full sidebar previously had NONE of
-          // its items shown here at all — now it gets one launcher icon
-          // (the section's own header icon) that peeks the full sidebar
-          // open with just that section expanded, so it's reachable from
-          // the icon rail without permanently expanding everything.
-          if (sectionCollapsed[k]) {
-            return (
-              <button
-                key={`sec-${k}`}
-                onClick={() => onPeekSection?.(k)}
-                onMouseEnter={(e) => showFlyout(e, SECTION_META[k]?.label ?? k)}
-                onMouseLeave={() => setFlyout(null)}
-                title={SECTION_META[k]?.label}
-                className="w-full flex items-center justify-center py-2.5 mx-1 rounded transition-all duration-100 text-chrome-fg/60 hover:text-chrome-fg hover:bg-chrome-fg/5"
-              >
-                {SECTION_ICONS[k] ?? ICONS.dashboard}
-              </button>
-            )
-          }
-          return (SECTION_ITEMS[k] ?? []).filter((i) => i.to).map((item) => (
-            <NavLink
-              key={item.key}
-              to={item.to!}
-              onClick={onNavClick}
-              onMouseEnter={(e) => showFlyout(e, item.label)}
-              onMouseLeave={() => setFlyout(null)}
-              className={itemLinkClass}
-            >
-              {ICONS[item.key] ?? ICONS.dashboard}
-            </NavLink>
-          ))
+          return (
+            <RailSectionButton
+              key={sec.key}
+              section={sec}
+              active={hasActive(sec.items) || fly?.key === sec.key}
+              onEnter={(e) => openFly(sec.key, e)}
+              onLeave={closeFlySoon}
+              onClick={(e) => openFly(sec.key, e)}
+            />
+          )
         })}
       </div>
       {/* Expand/collapse toggle — above quick access */}
@@ -1168,10 +1037,10 @@ function CollapsedNav({
               onMouseLeave={() => setFlyout(null)}
               className={({ isActive }) =>
                 [
-                  'flex items-center justify-center py-2 mx-1 rounded transition-all duration-100',
+                  'flex items-center justify-center py-2 mx-1 rounded-[11px] transition-colors',
                   isActive
-                    ? 'bg-chrome-fg/10 text-chrome-fg'
-                    : 'text-chrome-fg/60 hover:text-chrome-fg hover:bg-chrome-fg/5',
+                    ? 'bg-chrome-fg/15 text-chrome-fg'
+                    : 'text-chrome-fg/70 hover:text-chrome-fg hover:bg-chrome-fg/10',
                 ].join(' ')
               }
             >
@@ -1184,6 +1053,16 @@ function CollapsedNav({
         <div style={{ top: flyout.top, left: 60 }}
           className="fixed -translate-y-1/2 z-[60] bg-chrome text-chrome-fg text-xs font-heading px-2.5 py-1 rounded-md shadow-xl border border-chrome-fg/15 pointer-events-none whitespace-nowrap animate-[fadeIn_120ms_ease-out]">
           {flyout.label}
+        </div>,
+        document.body,
+      )}
+      {fly && flySection && createPortal(
+        <div
+          role="menu" onMouseEnter={keepFly} onMouseLeave={closeFlySoon}
+          style={{ top: Math.max(8, Math.min(fly.top, window.innerHeight - 56 - flySection.items.length * 36)), left: 62, maxHeight: 'calc(100vh - 16px)' }}
+          className="fixed z-[70] min-w-[220px] overflow-y-auto bg-chrome text-chrome-fg border border-chrome-fg/35 rounded-xl p-2 shadow-[0_14px_34px_rgba(0,0,0,0.35)] animate-[swipeRight_160ms_ease-out]">
+          <h5 className="mx-2 mt-0.5 mb-1.5 text-[11px] font-heading font-semibold uppercase tracking-[0.16em] text-sky">{flySection.label}</h5>
+          {flySection.items.map((item) => <FlyLink key={item.key} item={item} onNavClick={() => { setFly(null); onNavClick?.() }} />)}
         </div>,
         document.body,
       )}
@@ -1225,6 +1104,12 @@ function ExpandedSidebar({
   // on the bare "/" route, so it's the page the app opens to. Same
   // cross-device profile-prefs mechanism as everything else here.
   const [homePage, setHomePage] = useProfilePref<string | null>('home_page', null)
+  // A-style accordion: opening a section folds the others (Profile → Appearance → Navigation).
+  const [accordion] = useProfilePref<boolean>('nav:accordion', true)
+  const { pathname } = useLocation()
+  const [query, setQuery] = useState('')
+  const searchRef = useRef<HTMLInputElement>(null)
+  const { results, hl, setHl, run, onKeyDown } = useNavSearch(query, () => setQuery(''))
 
   const {
     sectionOrder,
@@ -1234,6 +1119,7 @@ function ExpandedSidebar({
     utilityNavOrder,
     setSectionOrder,
     toggleSection,
+    openOnlySection,
     toggleFavorite,
     setFavoritesOrder,
     setItemOrder,
@@ -1268,6 +1154,19 @@ function ExpandedSidebar({
     [sectionOrder, isAdmin, allowedSections, hiddenSections]
   )
 
+  const toggleOrOpen = (k: string) => {
+    if (!accordion) { toggleSection(k); return }
+    if (!sectionCollapsed[k]) toggleSection(k)
+    else openOnlySection(k, visibleSectionOrder)
+  }
+  // Navigating to a page (any way) opens the section it lives in, so the current page is always visible in the accordion.
+  useEffect(() => {
+    if (!accordion) return
+    const owner = visibleSectionOrder.find((k) => (SECTION_ITEMS[k] ?? []).some((i) => i.to && (pathname === i.to || pathname.startsWith(`${i.to}/`))))
+    if (owner && sectionCollapsed[owner]) openOnlySection(owner, visibleSectionOrder)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pathname, accordion])
+
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
@@ -1292,8 +1191,13 @@ function ExpandedSidebar({
         </div>
       )}
 
+      <NavSearchInput value={query} onChange={setQuery} onKeyDown={onKeyDown} inputRef={searchRef} onClear={() => setQuery('')} />
+
       {/* Scrollable nav */}
       <div className="flex-1 overflow-y-auto hover-scroll">
+        {query.trim() ? (
+          <NavResultList results={results} hl={hl} setHl={setHl} run={(e) => { run(e); onNavClick?.() }} query={query} tone="chrome" />
+        ) : (<>
         {rearranging && (
           <div className="sticky top-0 z-20 flex items-center justify-between gap-2 px-3 py-2 bg-sky/20 border-b border-sky/40 backdrop-blur-sm">
             <span className="text-[10px] font-heading text-chrome-fg uppercase tracking-wide">Drag items to reorder</span>
@@ -1305,6 +1209,7 @@ function ExpandedSidebar({
             </button>
           </div>
         )}
+        <div className="py-0.5"><div className="group/row"><NavItemLink item={HOME_ITEM} showLabel onNavClick={onNavClick} /></div></div>
         <FavoritesSection
           favorites={favorites}
           showLabels
@@ -1327,7 +1232,7 @@ function ExpandedSidebar({
                 showLabels
                 favorites={favorites}
                 onToggleFavorite={toggleFavorite}
-                onToggleCollapse={() => toggleSection(sectionKey)}
+                onToggleCollapse={() => toggleOrOpen(sectionKey)}
                 onNavClick={onNavClick}
                 itemOrder={itemOrder[sectionKey] ?? []}
                 overrideItems={undefined}
@@ -1336,6 +1241,7 @@ function ExpandedSidebar({
             ))}
           </SortableContext>
         </DndContext>
+        </>)}
       </div>
 
       {/* Shortcuts — collapsible + pinnable, with the sidebar-collapse control */}
