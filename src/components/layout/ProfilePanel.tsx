@@ -42,7 +42,7 @@ const TIMEZONES = [
 const QUICK_FAB_POSITIONS: { value: QuickFabPosition; label: string }[] = [
   { value: 'bottom-right', label: 'Bottom right corner' },
   { value: 'bottom-left', label: 'Bottom left corner' },
-  { value: 'topbar-left', label: 'Top bar — left' },
+  { value: 'topbar-left', label: 'Top bar (with the mega menu: under the SB drop)' },
 ]
 
 interface ProfilePanelProps {

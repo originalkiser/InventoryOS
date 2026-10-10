@@ -1,3 +1,4 @@
+import { beginColumnDrag, useColumnWidths } from '@/components/shared/columnResize'
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { MapPin, Settings, Grip, ChevronDown, Plus, Info } from 'lucide-react'
@@ -96,6 +97,14 @@ interface ViewPrefs { tank: string[]; nonVmiOfflineBtn?: boolean; tankView?: 'co
 const CombinedDisplayContext = createContext<CombinedDisplay>('hover')
 
 /** Class sets for this page's hand-built tables: the new grid look (rounded frame, navy header, banded rows) or the classic one (Profile → Tables). */
+/** Drag handle on a header cell's right edge: a cyan guide follows the drag, the width applies on release (shared with the data grid). */
+function TankResizeHandle({ width, onResize }: { width: number; onResize: (w: number) => void }) {
+  const start = (e: React.MouseEvent | React.TouchEvent) => beginColumnDrag(e as never, { th: e.currentTarget.parentElement as HTMLElement, startWidth: width, min: 60, max: 500, onCommit: onResize })
+  return <div onMouseDown={start} onTouchStart={start} aria-hidden className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize select-none touch-none hover:bg-[#00e5ff]/60" />
+}
+const ON_HAND_HEADS = ['Product ID', 'On Hand (Qts)', 'Droptop On Hand', 'Variance', 'Droptop Usage', 'DOS (Monitor)', 'DOS (Droptop)', 'Last Update']
+const tankColW = (label: string) => Math.max(90, Math.min(190, label.length * 9 + 34))
+
 function llTable(grid: boolean) {
   return {
     frame: grid
@@ -1601,6 +1610,7 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
   // Each shop in the dropdown carries the icons of its pending inventory exceptions.
   const { pendingByLocation: pendingExceptions } = useShopExceptions()
   const llt = llTable(useTableStyle().style === 'grid')
+  const tankCols = useColumnWidths('ll:tank-cols')
   const shopOptions = useMemo(
     () => loc.locations.filter((l) => l.active && !loc.isExcluded(l)).map((l) => {
       const pend = pendingExceptions.get(l.id)
@@ -2168,22 +2178,27 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
                     <p className="text-xs font-mono text-inky/60">All tank columns hidden — enable some under Customize.</p>
                   ) : (
                     <div className={llt.frame}>
-                      <table className="text-xs font-mono">
+                      <table className="text-xs font-mono" style={{ tableLayout: 'fixed', width: visibleTankCols.reduce((n, c) => n + (tankCols.widths[`cfg:${c.id}`] ?? tankColW(c.label)), 0) }}>
+                        <colgroup>{visibleTankCols.map((c) => <col key={c.id} style={{ width: tankCols.widths[`cfg:${c.id}`] ?? tankColW(c.label) }} />)}</colgroup>
                         <thead>
                           <tr className={llt.headRow}>
-                            {visibleTankCols.map((c) => (
-                              <th key={c.id} className={`px-3 py-2 align-bottom max-w-[10ch] ${llt.th} ${alignCls(c.align)}`}>
-                                <button onClick={() => setTankSort((s) => nextSort(s, c.id))} className={`uppercase tracking-wide ${llt.sortBtn} transition-colors inline-flex items-start gap-0.5 text-left leading-tight`}>
-                                  <span className="[overflow-wrap:normal]">{(c.id === 'on_hand' || c.id === 'available') && tankUnit ? `${c.label} (${tankUnit})` : c.label}</span>{sortArrow(tankSort, c.id)}
-                                </button>
-                              </th>
-                            ))}
+                            {visibleTankCols.map((c) => {
+                              const w = tankCols.widths[`cfg:${c.id}`] ?? tankColW(c.label)
+                              return (
+                                <th key={c.id} className={`relative px-3 py-2 align-bottom overflow-hidden ${llt.th} ${alignCls(c.align)}`}>
+                                  <button onClick={() => setTankSort((s) => nextSort(s, c.id))} className={`uppercase tracking-wide ${llt.sortBtn} transition-colors inline-flex items-start gap-0.5 text-left leading-tight`}>
+                                    <span className="break-words">{(c.id === 'on_hand' || c.id === 'available') && tankUnit ? `${c.label} (${tankUnit})` : c.label}</span>{sortArrow(tankSort, c.id)}
+                                  </button>
+                                  <TankResizeHandle width={w} onResize={(nw) => tankCols.setWidth(`cfg:${c.id}`, nw)} />
+                                </th>
+                              )
+                            })}
                           </tr>
                         </thead>
                         <tbody>
                           {(tankSort ? applySort(tanks, TANK_COLS, tankSort) : sortedTanks).map((t, ti) => (
                             <tr key={t.id} className={llt.row(ti)}>
-                              {visibleTankCols.map((c) => <td key={c.id} className={`px-3 py-1.5 text-navy whitespace-nowrap ${llt.td} ${alignCls(c.align)}`}>{c.id === 'updated' ? renderUpdatedCell(t) : c.render(t)}</td>)}
+                              {visibleTankCols.map((c) => <td key={c.id} className={`px-3 py-1.5 text-navy whitespace-nowrap overflow-hidden text-ellipsis ${llt.td} ${alignCls(c.align)}`}>{c.id === 'updated' ? renderUpdatedCell(t) : c.render(t)}</td>)}
                             </tr>
                           ))}
                         </tbody>
@@ -2197,11 +2212,15 @@ export function LocationDetailView({ embedded = false }: { embedded?: boolean })
                     </p>
                   ) : (
                     <div className={llt.frame}>
-                      <table className="text-xs font-mono">
+                      <table className="text-xs font-mono" style={{ tableLayout: 'fixed', width: ON_HAND_HEADS.reduce((n, h) => n + (tankCols.widths[`oh:${h}`] ?? tankColW(h)), 0) }}>
+                        <colgroup>{ON_HAND_HEADS.map((h) => <col key={h} style={{ width: tankCols.widths[`oh:${h}`] ?? tankColW(h) }} />)}</colgroup>
                         <thead>
                           <tr className={llt.headRow}>
-                            {['Product ID', 'On Hand (Qts)', 'Droptop On Hand', 'Variance', 'Droptop Usage', 'DOS (Monitor)', 'DOS (Droptop)', 'Last Update'].map((h) => (
-                              <th key={h} className={`px-3 py-2 align-bottom max-w-[10ch] [overflow-wrap:normal] leading-tight text-right first:text-left last:text-left ${llt.th}`}>{h}</th>
+                            {ON_HAND_HEADS.map((h) => (
+                              <th key={h} className={`relative px-3 py-2 align-bottom overflow-hidden break-words leading-tight text-right first:text-left last:text-left ${llt.th}`}>
+                                {h}
+                                <TankResizeHandle width={tankCols.widths[`oh:${h}`] ?? tankColW(h)} onResize={(nw) => tankCols.setWidth(`oh:${h}`, nw)} />
+                              </th>
                             ))}
                           </tr>
                         </thead>
@@ -2866,10 +2885,13 @@ function OrderConfigBlock({ groups, shopId, order, sizing, onResize, onOpenConfi
           }
           if (!info.eta) return '—'
           const daysPast = daysBetween(info.eta, todayIso)
+          // On a VMI row's blue-grey fill, red text is unreadable: an overdue ETA sits on a cream chip there instead.
+          const vmiRow = isVmiHighlighted(r)
+          const chip = vmiRow && daysPast > 0 ? 'self-start rounded bg-sb-cream px-1 py-px' : ''
           return (
             <div className="flex flex-col leading-tight">
-              <span className={daysPast > 0 ? 'text-[#C0392B] font-bold' : ''}>{dateShort(info.eta)}</span>
-              {daysPast > 0 && <span className="text-[9px] text-[#C0392B]/80">overdue {daysPast}d</span>}
+              <span className={`${chip} ${daysPast > 0 ? 'text-sb-red font-bold' : ''}`}>{dateShort(info.eta)}</span>
+              {daysPast > 0 && <span className={`${chip} mt-0.5 text-[9px] ${vmiRow ? 'text-sb-red font-semibold' : 'text-sb-red/80'}`}>overdue {daysPast}d</span>}
             </div>
           )
         },

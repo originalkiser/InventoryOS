@@ -113,3 +113,9 @@ export const UTILITY_ITEMS: NavItem[] = [
   { key: 'locations', label: 'Locations', to: '/locations' },
   { key: 'feature-requests', label: 'Feature Requests', to: '/feature-requests' },
 ]
+
+/** The section a page lives in ('shortcuts' for the utility pages), or null. */
+export function sectionKeyOfItem(itemKey: string): string | null {
+  for (const [k, items] of Object.entries(SECTION_ITEMS)) if (items.some((i) => i.key === itemKey)) return k
+  return UTILITY_ITEMS.some((i) => i.key === itemKey) ? 'shortcuts' : null
+}

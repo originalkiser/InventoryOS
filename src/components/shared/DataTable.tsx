@@ -4,6 +4,7 @@ import { Button, Input, Modal, SbLoader } from '@/components/ui'
 import { ColumnFilter } from '@/components/shared/ColumnFilter'
 import { useTableStyle } from '@/hooks/useTableStyle'
 import { StickyHScroll } from '@/components/shared/StickyHScroll'
+import { beginColumnDrag } from '@/components/shared/columnResize'
 import { ColumnManagerModal, type ColItem } from '@/modules/locations/ColumnManagerModal'
 import { supabase } from '@/lib/supabase'
 import toast from 'react-hot-toast'
@@ -186,39 +187,16 @@ const SEL_W = 36
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-/**
- * Column resize without lag: dragging only moves a guide line (straight DOM, no React render, no table relayout per mouse move); the new width is
- * applied once, on release. (TanStack's own 'onChange' mode re-rendered every row and re-laid-out the table on every pixel of movement.)
- */
+/** Column resize without lag — see columnResize.ts (a cyan guide line follows the drag; the width applies once on release). */
 function startColumnResize(e: React.MouseEvent | React.TouchEvent, header: Header<any, unknown>, table: TTable<any>, scroller: HTMLElement | null) {
-  e.preventDefault()
-  e.stopPropagation()
-  const touch = 'touches' in e
-  const pointX = (ev: MouseEvent | TouchEvent) => ('touches' in ev ? ev.touches[0]?.clientX ?? ev.changedTouches[0]?.clientX ?? 0 : ev.clientX)
-  const startX = touch ? e.touches[0].clientX : (e as React.MouseEvent).clientX
-  const th = (e.currentTarget as HTMLElement).parentElement as HTMLElement
-  const startW = header.getSize()
-  const min = header.column.columnDef.minSize ?? 40
-  const max = header.column.columnDef.maxSize ?? 800
-  const rect = (scroller ?? th).getBoundingClientRect()
-  const thRight = th.getBoundingClientRect().right
-  const line = document.createElement('div')
-  line.style.cssText = `position:fixed;z-index:9999;pointer-events:none;width:2px;background:#00e5ff;box-shadow:0 0 6px rgba(0,229,255,0.7);top:${rect.top}px;height:${rect.height}px;left:${thRight - 1}px`
-  document.body.appendChild(line)
-  const prevCursor = document.body.style.cursor
-  document.body.style.cursor = 'col-resize'
-  const clampDelta = (dx: number) => Math.min(max, Math.max(min, startW + dx)) - startW
-  const move = (ev: MouseEvent | TouchEvent) => { line.style.left = `${thRight - 1 + clampDelta(pointX(ev) - startX)}px` }
-  const up = (ev: MouseEvent | TouchEvent) => {
-    document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up)
-    document.removeEventListener('touchmove', move); document.removeEventListener('touchend', up); document.removeEventListener('touchcancel', up)
-    line.remove()
-    document.body.style.cursor = prevCursor
-    const size = Math.round(startW + clampDelta(pointX(ev) - startX))
-    if (size !== startW) table.setColumnSizing((old: Record<string, number>) => ({ ...old, [header.column.id]: size }))
-  }
-  document.addEventListener('mousemove', move); document.addEventListener('mouseup', up)
-  document.addEventListener('touchmove', move); document.addEventListener('touchend', up); document.addEventListener('touchcancel', up)
+  beginColumnDrag(e as never, {
+    th: (e.currentTarget as HTMLElement).parentElement as HTMLElement,
+    startWidth: header.getSize(),
+    min: header.column.columnDef.minSize ?? 40,
+    max: header.column.columnDef.maxSize ?? 800,
+    scroller,
+    onCommit: (size) => table.setColumnSizing((old: Record<string, number>) => ({ ...old, [header.column.id]: size })),
+  })
 }
 
 export function DataTable<T>({

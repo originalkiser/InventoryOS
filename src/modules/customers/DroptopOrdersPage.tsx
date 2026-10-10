@@ -31,7 +31,8 @@ import { PeriodPicker } from '@/components/shared/PeriodPicker'
 import { LoadingProgress } from '@/components/shared/LoadingProgress'
 import { DataCompletenessBadge } from '@/components/shared/DataCompletenessBadge'
 import { DataTable } from '@/components/shared/DataTable'
-import { Button, Card, CardBody, Input, Modal, MultiSelectDropdown, Toggle } from '@/components/ui'
+import { Button, Card, CardBody, Input, Modal, MultiSelectDropdown, SbLoader, Toggle } from '@/components/ui'
+import { formatDistanceToNowStrict } from 'date-fns'
 import { fetchDateRangeConcurrent } from '@/lib/concurrentDateRangeFetch'
 import { ColumnManagerModal, type ColItem } from '@/modules/locations/ColumnManagerModal'
 import { isM5, type Classification } from './PackageMappingPage'
@@ -109,6 +110,9 @@ interface OrderRowEmbedded extends OrderRow {
 // One column of the Build Your Own Report's order-level detail mode.
 interface TableCol2 { key: string; label: string; get: (o: OrderRow) => string; align?: 'right' }
 
+interface ShopRow { id: string; locationId: string; shopLabel: string; orders: number; revenue: number | null; avgTicket: number | null; revShare: number | null; oilChanges: number | null; m5Pct: number | null; avgQuarts: number | null }
+interface PackageRow2 { id: string; name: string; kind: string; orders: number; sold: number; revenue: number | null; avgPrice: number | null; soldShare: number | null; revShare: number | null; avgOilQuarts: number | null }
+
 const money = (v: number | null | undefined) => v == null ? '—' : v.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 })
 const isQuart = (uom: string | null | undefined) => (uom ?? '').trim().toUpperCase() === 'QT'
 const fieldCls = 'bg-cream border border-navy/30 rounded px-2 py-1.5 text-xs font-mono text-navy focus:outline-none focus:border-sky'
@@ -123,10 +127,10 @@ export function DroptopOrdersPage() {
   const { period, setPeriod, customStart, setCustomStart, customEnd, setCustomEnd, range } = useDateRangePeriod('droptop-orders:period', 'last_30_days')
 
   const [shopLabels, setShopLabels] = useState<string[]>([])
-  const [loadAllShops, setLoadAllShops] = useState(false)
   const [packageFilters, setPackageFilters] = useState<string[]>([])
   const [productIdFilters, setProductIdFilters] = useState<string[]>([])
-  const [vehicleFilters, setVehicleFilters] = useState<string[]>([])
+  const [vehicleModels, setVehicleModels] = useState<string[]>([])
+  const [vehicleYears, setVehicleYears] = useState<string[]>([])
   const [fleetFilters, setFleetFilters] = useState<string[]>([])
   const [oilOnly, setOilOnly] = useState(false)
   const [search, setSearch] = useState('')
@@ -178,7 +182,9 @@ export function DroptopOrdersPage() {
   const labelToId = useMemo(() => new Map(loc.includedOptions.map((o) => [o.label, o.value])), [loc.includedOptions])
   const idToLabel = useMemo(() => new Map(loc.includedOptions.map((o) => [o.value, o.label])), [loc.includedOptions])
   const shopIds = useMemo(() => shopLabels.map((l) => labelToId.get(l)).filter((v): v is string => !!v), [shopLabels, labelToId])
-  useEffect(() => { setDetailRequested(false) }, [range.start, range.end, shopIds.join(','), loadAllShops]) // eslint-disable-line react-hooks/exhaustive-deps
+  // Summary covers every shop unless some are picked; order detail loads on request, for the same scope.
+  const loadAllShops = shopIds.length === 0
+  useEffect(() => { setDetailRequested(false) }, [range.start, range.end, shopIds.join(',')]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Region/Market/AM — same shape as Customer Heatmap's pin filters, but
   // here they narrow the SELECTED shops (whichever the query already
@@ -229,9 +235,10 @@ export function DroptopOrdersPage() {
   // scope = summaryLocationIds (null = all shops). The Vehicle Make filter applies to these numbers; the Package/Product/Vehicle/Fleet/Oil
   // Only/Search filters still apply to order-level detail only, as before.
   const [vehicleMakes, setVehicleMakes] = useState<string[]>([])
-  const rollups = useOrderRollups(!!companyId && (shopIds.length > 0 || loadAllShops), {
+  // Loads by itself (all shops unless some are picked), from the day-long cache when this period was loaded recently; see droptopRollups.ts.
+  const rollups = useOrderRollups(!!companyId, {
     start: range.start, end: range.end, locationIds: summaryLocationIds, vehicleMakes,
-  })
+  }, period !== 'custom' ? period : null)
   const summaryStats = useMemo(
     () => (rollups.data ? deriveSummary(rollups.data.sales, rollups.data.packageMix, rollups.data.productMix, packageClassification) : null),
     [rollups.data, packageClassification],
@@ -239,6 +246,8 @@ export function DroptopOrdersPage() {
   const summaryLoading = rollups.loading
   const summaryError = rollups.error
   const makeOptions = useMemo(() => (rollups.data?.makes ?? []).map((m) => ({ value: m.vehicle_make, count: m.orders })), [rollups.data])
+  const rollupPackageOptions = useMemo(() => (rollups.data?.packageMix ?? []).map((m) => ({ value: m.package_name, count: m.packages_sold })).sort((a, b) => a.value.localeCompare(b.value)), [rollups.data])
+  const rollupProductOptions = useMemo(() => (rollups.data?.productMix ?? []).map((m) => ({ value: m.product_id, count: Math.round(m.quantity) })).sort((a, b) => a.value.localeCompare(b.value)), [rollups.data])
 
   // Extracted out of what used to be the raw-fetch effect's own inline
   // body so the "Load data for this shop" quick-load (below, from the
@@ -531,10 +540,12 @@ export function DroptopOrdersPage() {
     for (const p of packages) if (p.name) m.set(p.name, (m.get(p.name) ?? 0) + 1)
     return m
   }, [packages])
-  const packageOptions = useMemo(
+  const detailPackageOptions = useMemo(
     () => allPackageNames.map((n) => ({ value: n, count: packageOptionCounts.get(n) ?? 0 })),
     [allPackageNames, packageOptionCounts],
   )
+  // Before order detail is loaded the choices come from the summary rollups, so Package / Product ID can be picked right away.
+  const packageOptions = packages.length ? detailPackageOptions : rollupPackageOptions
 
   // Every product id that actually shows up on an order in scope, from
   // both sources — see the file header comment for why both are needed.
@@ -553,10 +564,11 @@ export function DroptopOrdersPage() {
     for (const svc of services) for (const pr of (svc.products ?? [])) if (pr.product_id) m.set(pr.product_id, (m.get(pr.product_id) ?? 0) + 1)
     return m
   }, [products, services])
-  const productIdOptions = useMemo(
+  const detailProductIdOptions = useMemo(
     () => allProductIds.map((id) => ({ value: id, count: productIdOptionCounts.get(id) ?? 0 })),
     [allProductIds, productIdOptionCounts],
   )
+  const productIdOptions = allProductIds.length ? detailProductIdOptions : rollupProductOptions
 
   // Fleet names actually present on a loaded order — same derivation shape
   // as allPackageNames/allProductIds above.
@@ -574,30 +586,32 @@ export function DroptopOrdersPage() {
     [allFleetNames, fleetOptionCounts],
   )
 
-  // One option per distinct vehicle label (year/make/model, or its
-  // fallback chain — see vehicleBaseLabel) across every order in scope —
-  // lets a user look up "this vehicle's" orders the same way the
-  // Package(s)/Product ID dropdowns look up an order set by what was sold.
-  // Two different vehicles that happen to share a label (e.g. two 2015
-  // Honda Accords) collapse into one option, same tradeoff Package(s)
-  // already makes by name rather than id.
-  const allVehicleLabels = useMemo(
-    () => [...new Set(vehicles.map(vehicleBaseLabel).filter((l) => l !== '—'))].sort(),
-    [vehicles],
-  )
-  const vehicleOptionCounts = useMemo(() => {
-    const m = new Map<string, number>()
-    for (const v of vehicles) { const l = vehicleBaseLabel(v); if (l !== '—') m.set(l, (m.get(l) ?? 0) + 1) }
+  // Vehicle Make comes from the summary rollup (see makeOptions); Model and Year are read from the loaded order detail, so they stay empty until
+  // detail is loaded. (They used to be one slow "Vehicle" dropdown of every year/make/model combination.)
+  const vehicleAttrsByOrder = useMemo(() => {
+    const m = new Map<string, { makes: Set<string>; models: Set<string>; years: Set<string> }>()
+    for (const v of vehicles) {
+      const a = m.get(v.order_id) ?? { makes: new Set<string>(), models: new Set<string>(), years: new Set<string>() }
+      if (v.vin_vehicle_make) a.makes.add(v.vin_vehicle_make.toLowerCase())
+      if (v.vin_vehicle_model) a.models.add(v.vin_vehicle_model)
+      if (v.vin_vehicle_year != null) a.years.add(String(v.vin_vehicle_year))
+      m.set(v.order_id, a)
+    }
     return m
   }, [vehicles])
-  const vehicleOptions = useMemo(
-    () => allVehicleLabels.map((l) => ({ value: l, count: vehicleOptionCounts.get(l) ?? 0 })),
-    [allVehicleLabels, vehicleOptionCounts],
-  )
-  const vehicleLabelsByOrder = useMemo(() => {
-    const m = new Map<string, Set<string>>()
-    for (const v of vehicles) { const l = vehicleBaseLabel(v); const s = m.get(v.order_id) ?? new Set<string>(); s.add(l); m.set(v.order_id, s) }
-    return m
+  const vehicleModelOptions = useMemo(() => {
+    const c = new Map<string, number>()
+    for (const v of vehicles) {
+      if (!v.vin_vehicle_model) continue
+      if (vehicleMakes.length && !vehicleMakes.some((mk) => mk.toLowerCase() === (v.vin_vehicle_make ?? '').toLowerCase())) continue
+      c.set(v.vin_vehicle_model, (c.get(v.vin_vehicle_model) ?? 0) + 1)
+    }
+    return [...c.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([value, count]) => ({ value, count }))
+  }, [vehicles, vehicleMakes])
+  const vehicleYearOptions = useMemo(() => {
+    const c = new Map<string, number>()
+    for (const v of vehicles) if (v.vin_vehicle_year != null) c.set(String(v.vin_vehicle_year), (c.get(String(v.vin_vehicle_year)) ?? 0) + 1)
+    return [...c.entries()].sort((a, b) => Number(b[0]) - Number(a[0])).map(([value, count]) => ({ value, count }))
   }, [vehicles])
 
   // Client-side filtering — package/product filters need the joined child
@@ -614,9 +628,12 @@ export function DroptopOrdersPage() {
         const inServices = (servicesByOrder.get(o.id) ?? []).some((s) => (s.products ?? []).some((p) => p.product_id && productIdFilters.includes(p.product_id)))
         if (!inTopLevel && !inServices) return false
       }
-      if (vehicleFilters.length) {
-        const labels = vehicleLabelsByOrder.get(o.id)
-        if (!labels || !vehicleFilters.some((f) => labels.has(f))) return false
+      if (vehicleMakes.length || vehicleModels.length || vehicleYears.length) {
+        const a = vehicleAttrsByOrder.get(o.id)
+        if (!a) return false
+        if (vehicleMakes.length && !vehicleMakes.some((m) => a.makes.has(m.toLowerCase()))) return false
+        if (vehicleModels.length && !vehicleModels.some((m) => a.models.has(m))) return false
+        if (vehicleYears.length && !vehicleYears.some((y) => a.years.has(y))) return false
       }
       if (fleetFilters.length && !(o.fleet_company_name && fleetFilters.includes(o.fleet_company_name))) return false
       if (oilOnly && quartsFor(o.id) === 0) return false
@@ -626,7 +643,7 @@ export function DroptopOrdersPage() {
       }
       return true
     })
-  }, [orders, packagesByOrder, productsByOrder, servicesByOrder, vehicleLabelsByOrder, search, packageFilters, productIdFilters, vehicleFilters, fleetFilters, oilOnly, allowedLocationIds])
+  }, [orders, packagesByOrder, productsByOrder, servicesByOrder, vehicleAttrsByOrder, search, packageFilters, productIdFilters, vehicleMakes, vehicleModels, vehicleYears, fleetFilters, oilOnly, allowedLocationIds])
 
   const filteredOrderIds = useMemo(() => new Set(filteredOrders.map((o) => o.id)), [filteredOrders])
 
@@ -651,21 +668,25 @@ export function DroptopOrdersPage() {
     orderCol.accessor((o) => [o.first_name, o.last_name].filter(Boolean).join(' ') || '—', { id: 'customer', header: 'Customer' }),
     orderCol.accessor('city', { id: 'city', header: 'City', cell: (i) => i.getValue() || '—' }),
     orderCol.accessor('status', { id: 'status', header: 'Status', cell: (i) => i.getValue() || '—' }),
-    orderCol.display({
+    // Packages / Base Service Price / Products carry several values per order, so their filters list each UNIQUE value (not the comma
+    // combinations) with a search box; Quarts has the greater-than / less-than / between number filter.
+    orderCol.accessor((o) => (packagesByOrder.get(o.id) ?? []).map((p) => p.name).filter(Boolean).join(', ') || '—', {
       id: 'packages', header: 'Packages', enableSorting: false,
-      cell: (i) => (packagesByOrder.get(i.row.original.id) ?? []).map((p) => p.name).filter(Boolean).join(', ') || '—',
+      meta: { multiValue: (o: OrderRow) => (packagesByOrder.get(o.id) ?? []).map((p) => p.name).filter((n): n is string => !!n) },
     }),
-    orderCol.display({
+    orderCol.accessor((o) => (packagesByOrder.get(o.id) ?? []).map((p) => p.base_service_price != null ? money(p.base_service_price) : null).filter(Boolean).join(', ') || '—', {
       id: 'base_price', header: 'Base Service Price', enableSorting: false,
-      cell: (i) => <span className="block text-right">{(packagesByOrder.get(i.row.original.id) ?? []).map((p) => p.base_service_price != null ? money(p.base_service_price) : null).filter(Boolean).join(', ') || '—'}</span>,
+      cell: (i) => <span className="block text-right">{i.getValue()}</span>,
+      meta: { multiValue: (o: OrderRow) => (packagesByOrder.get(o.id) ?? []).map((p) => (p.base_service_price != null ? money(p.base_service_price) : null)).filter((v): v is string => !!v) },
     }),
-    orderCol.display({
+    orderCol.accessor((o) => productIdsFor(o.id).join(', ') || '—', {
       id: 'products', header: 'Products', enableSorting: false,
-      cell: (i) => productIdsFor(i.row.original.id).join(', ') || '—',
+      meta: { multiValue: (o: OrderRow) => productIdsFor(o.id) },
     }),
-    orderCol.display({
+    orderCol.accessor((o) => quartsFor(o.id), {
       id: 'quarts', header: 'Quarts',
-      cell: (i) => { const q = quartsFor(i.row.original.id); return <span className="block text-right">{q > 0 ? q.toFixed(2) : '—'}</span> },
+      cell: (i) => { const q = i.getValue(); return <span className="block text-right">{q > 0 ? q.toFixed(2) : '—'}</span> },
+      meta: { numeric: true },
     }),
     orderCol.display({
       id: 'm5_pct', header: 'M5%', enableSorting: false,
@@ -863,6 +884,89 @@ export function DroptopOrdersPage() {
         }))
         .sort((a, b) => a.shopLabel.localeCompare(b.shopLabel, undefined, { numeric: true }))
     : shopStats.map((s) => ({ ...s, revenue: null as number | null }))
+
+  // ---- By Shop / By Package tables (the standard DataTable) -----------------------------------------------------------
+  // Summary view: orders + revenue from the rollups, with oil changes / M5% / avg quarts from the per-shop stats call (arrives a moment later).
+  // Once order detail is loaded the client-computed numbers take over (they respect the Package/Product/Vehicle/Search filters).
+  const shopStatsById = useMemo(() => new Map((rollups.shopStats ?? []).map((r) => [r.location_id, r])), [rollups.shopStats])
+  const revenueByLocation = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const o of filteredOrders) m.set(o.location_id ?? '—', (m.get(o.location_id ?? '—') ?? 0) + (o.final_price ?? 0))
+    return m
+  }, [filteredOrders])
+  const shopRows = useMemo<ShopRow[]>(() => {
+    if (useSummaryStats && summaryStats) {
+      const total = summaryStats.totals.revenue
+      return summaryStats.by_shop.map((x) => {
+        const st = shopStatsById.get(x.location_id)
+        return {
+          id: x.location_id ?? '—', locationId: x.location_id ?? '—',
+          shopLabel: x.location_id ? (idToLabel.get(x.location_id) ?? x.location_id) : '—',
+          orders: x.count, revenue: x.revenue, avgTicket: x.count > 0 ? x.revenue / x.count : null,
+          revShare: total > 0 ? (x.revenue / total) * 100 : null,
+          oilChanges: st ? st.oil_packages : null,
+          m5Pct: st && st.oil_packages > 0 ? (st.m5_packages / st.oil_packages) * 100 : null,
+          avgQuarts: st && st.oil_packages > 0 ? st.quarts / st.oil_packages : null,
+        }
+      }).sort((a, b) => a.shopLabel.localeCompare(b.shopLabel, undefined, { numeric: true }))
+    }
+    const total = filteredOrders.reduce((n, o) => n + (o.final_price ?? 0), 0)
+    return shopStats.map((x) => {
+      const rev = revenueByLocation.get(x.locationId) ?? 0
+      return { id: x.locationId, locationId: x.locationId, shopLabel: x.shopLabel, orders: x.count, revenue: rev, avgTicket: x.count > 0 ? rev / x.count : null, revShare: total > 0 ? (rev / total) * 100 : null, oilChanges: null, m5Pct: x.m5Pct, avgQuarts: x.avgQuarts > 0 ? x.avgQuarts : null }
+    })
+  }, [useSummaryStats, summaryStats, shopStatsById, idToLabel, shopStats, filteredOrders, revenueByLocation])
+  const kindOf = useCallback((name: string) => { const c = packageClassification.get(name); return c === 'oil_change' ? 'Oil Change' : c && isM5(c) ? 'M5' : '—' }, [packageClassification])
+  const revenueByPackage = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const pk of packages) if (pk.name && filteredOrderIds.has(pk.order_id)) m.set(pk.name, (m.get(pk.name) ?? 0) + (pk.price_total_after_discount ?? pk.price_total ?? 0))
+    return m
+  }, [packages, filteredOrderIds])
+  const packageRows = useMemo<PackageRow2[]>(() => {
+    if (useSummaryStats && summaryStats) {
+      const sold = summaryStats.by_package.reduce((n, x) => n + x.sold, 0), rev = summaryStats.by_package.reduce((n, x) => n + x.revenue, 0)
+      return summaryStats.by_package.map((x) => ({ id: x.name, name: x.name, kind: kindOf(x.name), orders: x.orders, sold: x.sold, revenue: x.revenue, avgPrice: x.sold > 0 ? x.revenue / x.sold : null, soldShare: sold > 0 ? (x.sold / sold) * 100 : null, revShare: rev > 0 ? (x.revenue / rev) * 100 : null, avgOilQuarts: null }))
+    }
+    const sold = packageStats.reduce((n, x) => n + x.count, 0), rev = [...revenueByPackage.values()].reduce((n, v) => n + v, 0)
+    return packageStats.map((x) => {
+      const r = revenueByPackage.get(x.name) ?? 0
+      return { id: x.name, name: x.name, kind: kindOf(x.name), orders: x.count, sold: x.count, revenue: r, avgPrice: x.count > 0 ? r / x.count : null, soldShare: sold > 0 ? (x.count / sold) * 100 : null, revShare: rev > 0 ? (r / rev) * 100 : null, avgOilQuarts: x.avgOilQuarts > 0 ? x.avgOilQuarts : null }
+    })
+  }, [useSummaryStats, summaryStats, packageStats, revenueByPackage, kindOf])
+
+  const shopCol = useMemo(() => createColumnHelper<ShopRow>(), [])
+  const pctCell = (v: number | null) => <span className="block text-right">{v == null ? '—' : `${v.toFixed(1)}%`}</span>
+  const numCell = (v: number | null, d = 0) => <span className="block text-right">{v == null ? '—' : v.toLocaleString(undefined, { maximumFractionDigits: d, minimumFractionDigits: d })}</span>
+  const pendingCell = (v: number | null, render: (n: number) => string) => (
+    <span className="block text-right">{v != null ? render(v) : useSummaryStats && rollups.shopStatsLoading ? '…' : '—'}</span>
+  )
+  const shopColumns = useMemo(() => [
+    shopCol.accessor('shopLabel', { id: 'shop', header: 'Shop', cell: (i) => <span className="underline decoration-dotted whitespace-nowrap">{i.getValue()}</span> }),
+    shopCol.accessor('orders', { id: 'orders', header: 'Orders', cell: (i) => numCell(i.getValue()), meta: { numeric: true } }),
+    shopCol.accessor((r) => r.revenue ?? 0, { id: 'revenue', header: 'Revenue', cell: (i) => <span className="block text-right">{money(i.getValue())}</span>, meta: { numeric: true } }),
+    shopCol.accessor((r) => r.avgTicket ?? 0, { id: 'avg_ticket', header: 'Avg Ticket', cell: (i) => <span className="block text-right">{money(i.getValue())}</span>, meta: { numeric: true } }),
+    shopCol.accessor((r) => r.revShare ?? 0, { id: 'rev_share', header: '% of Revenue', cell: (i) => pctCell(i.getValue()), meta: { numeric: true } }),
+    shopCol.accessor((r) => r.oilChanges ?? 0, { id: 'oil_changes', header: 'Oil Changes', cell: (i) => pendingCell(i.row.original.oilChanges, (n) => n.toLocaleString()), meta: { numeric: true } }),
+    shopCol.accessor((r) => r.m5Pct ?? 0, { id: 'm5', header: 'M5%', cell: (i) => pendingCell(i.row.original.m5Pct, (n) => `${n.toFixed(1)}%`), meta: { numeric: true } }),
+    shopCol.accessor((r) => r.avgQuarts ?? 0, { id: 'avg_quarts', header: 'Avg Quarts / Oil Change', cell: (i) => pendingCell(i.row.original.avgQuarts, (n) => n.toFixed(2)), meta: { numeric: true } }),
+  ], [shopCol, useSummaryStats, rollups.shopStatsLoading]) // eslint-disable-line react-hooks/exhaustive-deps
+  const { table: shopTable, globalFilter: shopFilter, setGlobalFilter: setShopFilter, columnVisibility: shopColVis, columnOrder: shopColOrder, setColumnOrder: setShopColOrder } = useTable(shopRows, shopColumns, { persistKey: 'droptop_orders.by_shop', initialPageSize: 25, initialSorting: [{ id: 'orders', desc: true }] })
+  useColumnPrefs('droptop_orders.by_shop', shopTable, shopColVis, shopColOrder, setShopColOrder)
+
+  const pkgCol = useMemo(() => createColumnHelper<PackageRow2>(), [])
+  const packageColumns = useMemo(() => [
+    pkgCol.accessor('name', { id: 'package', header: 'Package' }),
+    pkgCol.accessor('kind', { id: 'kind', header: 'Type' }),
+    pkgCol.accessor('sold', { id: 'sold', header: 'Packages Sold', cell: (i) => numCell(i.getValue()), meta: { numeric: true } }),
+    pkgCol.accessor('orders', { id: 'orders', header: 'Orders', cell: (i) => numCell(i.getValue()), meta: { numeric: true } }),
+    pkgCol.accessor((r) => r.revenue ?? 0, { id: 'revenue', header: 'Revenue', cell: (i) => <span className="block text-right">{money(i.getValue())}</span>, meta: { numeric: true } }),
+    pkgCol.accessor((r) => r.avgPrice ?? 0, { id: 'avg_price', header: 'Avg Price', cell: (i) => <span className="block text-right">{money(i.getValue())}</span>, meta: { numeric: true } }),
+    pkgCol.accessor((r) => r.soldShare ?? 0, { id: 'sold_share', header: '% of Packages', cell: (i) => pctCell(i.getValue()), meta: { numeric: true } }),
+    pkgCol.accessor((r) => r.revShare ?? 0, { id: 'rev_share', header: '% of Revenue', cell: (i) => pctCell(i.getValue()), meta: { numeric: true } }),
+    pkgCol.accessor((r) => r.avgOilQuarts ?? 0, { id: 'avg_oil', header: 'Avg Oil (Qts)', cell: (i) => <span className="block text-right" title={useSummaryStats ? 'Per-package oil quarts come with order detail' : undefined}>{i.row.original.avgOilQuarts != null ? i.row.original.avgOilQuarts.toFixed(2) : '—'}</span>, meta: { numeric: true } }),
+  ], [pkgCol, useSummaryStats]) // eslint-disable-line react-hooks/exhaustive-deps
+  const { table: pkgTable, globalFilter: pkgFilter, setGlobalFilter: setPkgFilter, columnVisibility: pkgColVis, columnOrder: pkgColOrder, setColumnOrder: setPkgColOrder } = useTable(packageRows, packageColumns, { persistKey: 'droptop_orders.by_package', initialPageSize: 25, initialSorting: [{ id: 'sold', desc: true }] })
+  useColumnPrefs('droptop_orders.by_package', pkgTable, pkgColVis, pkgColOrder, setPkgColOrder)
 
   // ---- Build Your Own Report ------------------------------------------
   // Operates on whatever's already loaded (filteredOrders — respects the
@@ -1063,7 +1167,7 @@ export function DroptopOrdersPage() {
         </div>
         <div className="flex flex-col items-end gap-1">
           <DataCompletenessBadge connectionKey="droptop_orders" />
-          {(shopIds.length > 0 || loadAllShops) && (
+          {(
             <span className="text-[10px] font-mono text-inky/70" title="The summary reads daily rollups refreshed at 8am and 9am ET — it isn't live.">
               {summaryStats?.dataThrough ? `Data through ${summaryStats.dataThrough}` : summaryStats ? 'No orders in this range' : ''}
               {summaryLoading && summaryStats ? ' · updating…' : ''}
@@ -1078,7 +1182,7 @@ export function DroptopOrdersPage() {
           Shops" chip that used to sit here was removed — the Shop(s)
           dropdown itself is enough of a "not scoped to one shop" signal,
           and picking any shop already clears loadAllShops (below). */}
-      <div className="flex items-end gap-2 flex-wrap">
+      <div className="relative z-40 flex items-end gap-2 flex-wrap">
         <PeriodPicker period={period} onPeriodChange={setPeriod} customStart={customStart} customEnd={customEnd}
           onCustomStartChange={setCustomStart} onCustomEndChange={setCustomEnd} earliestDate={earliestDate} />
         <div className="flex flex-col gap-0.5">
@@ -1096,7 +1200,7 @@ export function DroptopOrdersPage() {
         <div className="flex flex-col gap-0.5">
           <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Shop(s)</span>
           <MultiSelectDropdown options={shopOptions} selected={shopLabels}
-            onChange={(labels) => { setShopLabels(labels); if (labels.length) setLoadAllShops(false) }}
+            onChange={setShopLabels}
             placeholder="All Shops" countNoun="shops" searchable />
         </div>
         <div className="flex flex-col gap-0.5">
@@ -1108,12 +1212,16 @@ export function DroptopOrdersPage() {
           <MultiSelectDropdown options={productIdOptions} selected={productIdFilters} onChange={setProductIdFilters} placeholder="All Products" countNoun="products" searchable />
         </div>
         <div className="flex flex-col gap-0.5">
-          <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide" title="Filters the summary above by the order's first vehicle's make">Vehicle Make</span>
+          <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide" title="Narrows the summary and the order detail by the order's first vehicle's make">Vehicle Make</span>
           <MultiSelectDropdown options={makeOptions} selected={vehicleMakes} onChange={setVehicleMakes} placeholder="All Makes" countNoun="makes" searchable />
         </div>
         <div className="flex flex-col gap-0.5">
-          <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Vehicle</span>
-          <MultiSelectDropdown options={vehicleOptions} selected={vehicleFilters} onChange={setVehicleFilters} placeholder="All Vehicles" countNoun="vehicles" searchable />
+          <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide" title="Filters order detail — the models come from the loaded orders">Vehicle Model</span>
+          <MultiSelectDropdown options={vehicleModelOptions} selected={vehicleModels} onChange={setVehicleModels} placeholder={vehicles.length ? 'All Models' : 'Load detail…'} countNoun="models" searchable />
+        </div>
+        <div className="flex flex-col gap-0.5">
+          <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide" title="Filters order detail — the years come from the loaded orders">Vehicle Year</span>
+          <MultiSelectDropdown options={vehicleYearOptions} selected={vehicleYears} onChange={setVehicleYears} placeholder={vehicles.length ? 'All Years' : 'Load detail…'} countNoun="years" searchable />
         </div>
         <div className="flex flex-col gap-0.5">
           <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Fleet</span>
@@ -1136,36 +1244,26 @@ export function DroptopOrdersPage() {
         <p className="text-xs font-mono text-[#C0392B] border border-[#C0392B]/30 bg-[#C0392B]/5 rounded px-2 py-1.5">{error}</p>
       )}
 
-      {!shopIds.length && !loadAllShops ? (
-        <Card><CardBody className="flex flex-col gap-2">
-          <p className="text-xs font-mono text-inky/60">
-            Select at least one shop above to load orders — an unscoped pull across every shop for a date range is
-            slow and disabled by default.
-          </p>
-          <Button size="sm" variant="secondary" className="self-start" onClick={() => setLoadAllShops(true)}>
-            Load All Shops for This Period
-          </Button>
-        </CardBody></Card>
-      ) : (
+      {(
         <>
-          {/* High-level stats — from the fast SQL summary
-              (the daily rollup RPCs, see droptopRollups.ts) until order-level detail is
-              explicitly requested below, then from the client-computed
-              totals/packageStats/shopStats so any ad-hoc Package/Product/
-              Vehicle/Fleet/Oil-Only/Search filter is reflected (the summary
-              RPC deliberately doesn't replicate those — see its own
-              migration comment). Found live 2026-09-24: a real 170k-order/
-              30-day range took 4 minutes here because these numbers used to
-              require the full per-order detail fetch below every time. */}
+          {/* Summary status — loads by itself; cancel it, and a filter change mid-load pauses until Apply. */}
+          <div className="flex items-center gap-3 flex-wrap rounded-lg border border-navy/15 bg-cream px-3 py-1.5 text-[11px] font-mono text-inky">
+            {rollups.status === 'loading' && <><SbLoader size={14} /><span>Loading summary…</span><Button size="sm" variant="ghost" onClick={rollups.cancel}>Cancel load</Button></>}
+            {rollups.status === 'paused' && <><span className="text-sb-orange font-semibold">Filters changed while loading — the load was paused.</span><Button size="sm" onClick={rollups.apply}>Apply filters</Button></>}
+            {rollups.status === 'cancelled' && <><span>Load cancelled.</span><Button size="sm" onClick={rollups.apply}>Load summary</Button></>}
+            {rollups.status === 'error' && <><span className="text-sb-red">{rollups.error}</span><Button size="sm" onClick={rollups.apply}>Retry</Button></>}
+            {rollups.status === 'idle' && (
+              <>
+                <span>{rollups.cachedAt ? `Showing the summary saved ${formatDistanceToNowStrict(rollups.cachedAt)} ago.` : summaryStats ? 'Summary is up to date for these filters.' : ''}</span>
+                {rollups.cachedAt && <Button size="sm" variant="ghost" onClick={rollups.apply}>Refresh</Button>}
+              </>
+            )}
+            {rollups.shopStatsLoading && <span className="flex items-center gap-1.5"><SbLoader size={12} />per-shop M5% / quarts loading…</span>}
+          </div>
+
           {useSummaryStats && summaryLoading && !summaryStats ? (
-            <LoadingProgress
-              fraction={null}
-              countText="Loading summary…"
-              messages={['Reading the daily rollups…', 'Tallying packages by shop…']}
-            />
-          ) : useSummaryStats && summaryError && !summaryStats ? (
-            <p className="text-xs font-mono text-[#C0392B] border border-[#C0392B]/30 bg-[#C0392B]/5 rounded px-2 py-1.5">{summaryError}</p>
-          ) : (
+            <LoadingProgress fraction={null} countText="Loading summary…" messages={['Reading the daily rollups…', 'Tallying packages by shop…']} />
+          ) : !summaryStats && useSummaryStats ? null : (
             <>
               <div className="flex gap-3 flex-wrap">
                 <Card className="flex-1 min-w-[140px]"><CardBody className="py-3">
@@ -1182,7 +1280,7 @@ export function DroptopOrdersPage() {
                 </CardBody></Card>
                 <Card className="flex-1 min-w-[140px]"><CardBody className="py-3">
                   <p className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Distinct Packages</p>
-                  <p className="text-lg font-heading font-bold text-navy">{effectivePackageStats.length}</p>
+                  <p className="text-lg font-heading font-bold text-navy">{packageRows.length}</p>
                 </CardBody></Card>
                 <Card className="flex-1 min-w-[140px]"><CardBody className="py-3">
                   <p className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Avg Quarts (Oil Change)</p>
@@ -1194,73 +1292,26 @@ export function DroptopOrdersPage() {
                 </CardBody></Card>
               </div>
 
-              {/* Package + Shop summaries, side by side — each half the width
-                  this used to take full-width, freeing room for the shop
-                  breakdown next to it. */}
-              <div className="flex gap-3 flex-wrap items-start">
-                <Card className="flex-1 min-w-[280px]">
+              {/* Package + Shop summaries, side by side (the standard data grid: sort, filter, resize, export). */}
+              <div className="grid gap-3 xl:grid-cols-2 items-start">
+                <Card>
                   <CardBody className="flex flex-col gap-2">
-                    <span className="text-xs font-mono text-navy uppercase tracking-wide">By Package</span>
-                    {effectivePackageStats.length === 0 ? (
+                    <span className="text-xs font-mono text-navy uppercase tracking-wide">By Package ({packageRows.length})</span>
+                    {packageRows.length === 0 ? (
                       <p className="text-xs font-mono text-inky/60">No packages in this filtered set.</p>
                     ) : (
-                      <div className="overflow-x-auto rounded border border-navy/30 max-h-72 overflow-y-auto">
-                        <table className="w-full text-xs font-mono">
-                          <thead className="sticky top-0 bg-cream">
-                            <tr className="border-b border-navy/30 text-inky uppercase tracking-wide">
-                              <th className="px-3 py-2 text-left">Package</th>
-                              <th className="px-3 py-2 text-right">Count</th>
-                              {useSummaryStats ? <th className="px-3 py-2 text-right">Revenue</th> : <th className="px-3 py-2 text-right">Avg Oil (Qts)</th>}
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {effectivePackageStats.map((s) => (
-                              <tr key={s.name} className="border-b border-navy/10">
-                                <td className="px-3 py-1.5 text-navy">{s.name}</td>
-                                <td className="px-3 py-1.5 text-navy text-right">{s.count.toLocaleString()}</td>
-                                <td className="px-3 py-1.5 text-navy text-right">{useSummaryStats ? money(s.revenue) : s.avgOilQuarts > 0 ? s.avgOilQuarts.toFixed(2) : '—'}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
+                      <DataTable table={pkgTable} globalFilter={pkgFilter} onGlobalFilterChange={setPkgFilter} exportFilename={`Droptop packages - ${range.start} to ${range.end}`} bodyMaxHeightClass="max-h-[460px]" density="compact" />
                     )}
                   </CardBody>
                 </Card>
-
-                <Card className="flex-1 min-w-[280px]">
+                <Card>
                   <CardBody className="flex flex-col gap-2">
-                    <span className="text-xs font-mono text-navy uppercase tracking-wide">By Shop ({effectiveShopStats.length})</span>
-                    {effectiveShopStats.length === 0 ? (
+                    <span className="text-xs font-mono text-navy uppercase tracking-wide">By Shop ({shopRows.length})</span>
+                    {shopRows.length === 0 ? (
                       <p className="text-xs font-mono text-inky/60">No shops in this filtered set.</p>
                     ) : (
-                      <div className="overflow-x-auto rounded border border-navy/30 max-h-72 overflow-y-auto">
-                        <table className="w-full text-xs font-mono">
-                          <thead className="sticky top-0 bg-cream">
-                            <tr className="border-b border-navy/30 text-inky uppercase tracking-wide">
-                              <th className="px-3 py-2 text-left">Shop</th>
-                              <th className="px-3 py-2 text-right">Orders</th>
-                              {useSummaryStats ? <th className="px-3 py-2 text-right">Revenue</th> : <><th className="px-3 py-2 text-right">Avg Quarts / Order</th><th className="px-3 py-2 text-right">M5%</th></>}
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {effectiveShopStats.map((s) => (
-                              <tr key={s.locationId} className="border-b border-navy/10 cursor-pointer hover:bg-sky/10"
-                                title={`See ${s.shopLabel}'s orders`}
-                                onClick={() => { setReportShops(s.locationId === '—' ? [] : [s.shopLabel]); setReportRegions([]); setReportMarkets([]); setReportAMs([]); setReportMode('detail'); setReportPage(0); setReportOpen(true) }}>
-                                <td className="px-3 py-1.5 text-navy whitespace-nowrap underline decoration-dotted">{s.shopLabel}</td>
-                                <td className="px-3 py-1.5 text-navy text-right">{s.count.toLocaleString()}</td>
-                                {useSummaryStats
-                                  ? <td className="px-3 py-1.5 text-navy text-right">{money(s.revenue)}</td>
-                                  : <>
-                                      <td className="px-3 py-1.5 text-navy text-right">{s.avgQuarts > 0 ? s.avgQuarts.toFixed(2) : '—'}</td>
-                                      <td className="px-3 py-1.5 text-navy text-right">{s.m5Pct != null ? `${s.m5Pct.toFixed(1)}%` : '—'}</td>
-                                    </>}
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
+                      <DataTable table={shopTable} globalFilter={shopFilter} onGlobalFilterChange={setShopFilter} exportFilename={`Droptop shops - ${range.start} to ${range.end}`} bodyMaxHeightClass="max-h-[460px]" density="compact"
+                        onRowClick={(r) => { setReportShops(r.locationId === '—' ? [] : [r.shopLabel]); setReportRegions([]); setReportMarkets([]); setReportAMs([]); setReportMode('detail'); setReportPage(0); setReportOpen(true) }} />
                     )}
                   </CardBody>
                 </Card>
@@ -1274,17 +1325,13 @@ export function DroptopOrdersPage() {
               exports) is the slow part for a large range; the stats above
               never need it. */}
           {!detailRequested ? (
-            <Card><CardBody className="flex flex-col gap-2">
-              <p className="text-xs font-mono text-inky/60">
-                The stats above are ready. Load full order-level detail to use the Package/Product/Vehicle/Fleet/Oil
-                Only/Search filters, see individual orders, or use Build Your Own Report — this is the slower step for
-                a large range.
-              </p>
-              <Button size="sm" variant="secondary" className="self-start" onClick={() => setDetailRequested(true)}>
-                Load Order Detail
-              </Button>
-            </CardBody></Card>
+            <div className="flex items-center gap-3 flex-wrap rounded-lg border border-navy/20 bg-cream px-3 py-2">
+              <Button size="sm" variant="secondary" onClick={() => setDetailRequested(true)}>Load order detail</Button>
+              <span className="text-[11px] font-mono text-inky/70">Individual orders, the Package/Product/Model/Year/Fleet filters and Build Your Own Report{shopIds.length ? '' : ' (all shops — slower for a big range)'}.</span>
+            </div>
           ) : loading ? (
+            <div className="flex flex-col gap-2">
+            <div><Button size="sm" variant="ghost" onClick={() => setDetailRequested(false)}>Abort load</Button></div>
             <LoadingProgress
               fraction={loadProgress.total ? loadProgress.loaded / loadProgress.total : null}
               countText={
@@ -1301,6 +1348,7 @@ export function DroptopOrdersPage() {
                 'Sorting by date…',
               ]}
             />
+            </div>
           ) : (
             /* Orders table — converted onto the standard DataTable stack
                (direct ask 2026-09-30, same design as the Orders v2 beta

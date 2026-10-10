@@ -222,12 +222,12 @@ export function AppShell() {
             tasksWidth={tasksWidth}
             tasksTopOffset={topBarHeight + reserve.top}
             tasksSidebarWidth={sidebarWidth}
-            navSlot={navLayout === 'mega' ? <MegaNav /> : null}
+            navSlot={navLayout === 'mega' ? <MegaNav quickItems={!mobile && fabPosition === 'topbar-left' ? quickAccessItems : undefined} /> : null}
             onTasksModeChange={setTasksModeP}
             onTasksWidthChange={setTasksWidthP}
             onToggleTasks={toggleTasks}
             onOpenTasks={openTasks}
-            quickAccessSlot={!mobile && fabPosition === 'topbar-left' ? <QuickAccessBar variant="topbar" items={quickAccessItems} /> : null}
+            quickAccessSlot={!mobile && fabPosition === 'topbar-left' && navLayout !== 'mega' ? <QuickAccessBar variant="topbar" items={quickAccessItems} /> : null}
           />
         </div>
         {/* Only the scrollable content area shifts right for docked panels —

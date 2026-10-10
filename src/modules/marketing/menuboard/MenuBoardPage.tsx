@@ -341,6 +341,10 @@ function BoardTab({ shopOptions, locationId, onLocationChange, location, package
  * updates position live, committed to the DB on release. Reused read-only
  * by the public share page (no editMode, no updatePackage).
  */
+// The board graphic always uses the original brand fonts (the same ones the published links use) no matter which font group the user picked in
+// Profile -> Appearance: the font tokens are re-pointed for everything inside the board. The pages around it still follow the user's choice.
+const BOARD_FONT_VARS = { ['--font-heading' as string]: "'Chakra Petch', sans-serif", ['--font-body' as string]: "'DM Mono', monospace", fontVariantNumeric: 'normal' } as React.CSSProperties
+
 export function Board({ location, packages, editMode = false, updatePackage, resolveQuart, address, width, layout = 'stacked', page = 1, shareUrl, hidePage2, footerNote, lang = 'en' }: {
   location: Location | undefined
   packages: MenuBoardPackage[]
@@ -520,7 +524,7 @@ export function Board({ location, packages, editMode = false, updatePackage, res
           but never narrower than the viewport — so a zoomed-in board scrolls
           from its left edge inside BoardViewer's overflow-auto instead of
           being centre-clipped on both sides. */}
-      <div className={`w-max min-w-full mx-auto ${layout === 'side-by-side' ? 'flex flex-row items-start justify-center gap-3' : 'flex flex-col items-center gap-3'}`}>
+      <div style={BOARD_FONT_VARS} className={`w-max min-w-full mx-auto ${layout === 'side-by-side' ? 'flex flex-row items-start justify-center gap-3' : 'flex flex-col items-center gap-3'}`}>
         {showP1 && page1}
         {showP2 && page2}
       </div>

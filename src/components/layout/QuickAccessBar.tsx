@@ -83,7 +83,7 @@ function QuickFab({ title, onClick, active, badge, children }: { title: string; 
       title={active ? `${title} (open — click to close)` : title}
       aria-label={title}
       className={[
-        'group flex items-center h-10 rounded-full text-cream px-2.5 transition-colors animate-[fabRise_200ms_ease-out] border-2',
+        'group flex items-center justify-center h-10 min-w-[40px] box-border rounded-full text-cream px-2 transition-colors animate-[fabRise_200ms_ease-out] border-2',
         active
           ? 'bg-navy border-sb-green shadow-[0_0_12px_3px_rgba(46,204,113,0.5)]'
           : 'bg-navy border-transparent hover:bg-navy/90',

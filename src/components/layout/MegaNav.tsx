@@ -5,7 +5,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { NavLink, useLocation } from 'react-router-dom'
-import { ChevronDown, Search } from 'lucide-react'
+import { ChevronDown, Pin, Search } from 'lucide-react'
+import { usePinMenu } from './PinContextMenu'
 import sbIcon from '@/assets/SBOC-IconCream.png'
 import { useNavBadge, useNavBadgeSum } from '@/hooks/useNavBadges'
 import { ICONS, SECTION_ICONS } from './navIcons'
@@ -13,19 +14,22 @@ import { NAV_META } from './navMeta'
 import { useMegaPrefs, applyMegaPrefs } from '@/hooks/useNavLayout'
 import { CARD_W, CARD_GAP, PANEL_PAD, centeredLeft, panelCols, panelWidth } from './navPanel'
 import { HOME_ITEM, useNavModel, type NavSection } from './useNavModel'
+import type { QuickAccessItem } from './QuickAccessBar'
 import type { NavItem } from './navData'
 
-function Card({ item, index, onGo }: { item: NavItem; index: number; onGo: () => void }) {
+function Card({ item, index, onGo, pinned, onContextMenu }: { item: NavItem; index: number; onGo: () => void; pinned: boolean; onContextMenu: (e: React.MouseEvent) => void }) {
   const badge = useNavBadge(item.key)
   return (
     <NavLink
       to={item.to!}
       role="menuitem"
       onClick={onGo}
+      onContextMenu={onContextMenu}
+      title="Right-click to pin or unpin"
       style={{ animationDelay: `${index * 40 + 40}ms`, width: CARD_W }}
       className={({ isActive }) =>
-        `flex flex-col justify-center gap-0.5 rounded-[12px] border px-3 py-2 min-h-[58px] text-left transition-colors animate-[sbCascade_300ms_cubic-bezier(0.2,0.7,0.2,1)_backwards] ${isActive
-          ? 'bg-sb-navy text-sb-cream border-sb-navy'
+        `relative flex flex-col justify-center gap-0.5 rounded-[12px] border px-3 py-2 min-h-[58px] text-left transition-colors animate-[sbCascade_300ms_cubic-bezier(0.2,0.7,0.2,1)_backwards] ${isActive
+          ? 'bg-sky/25 text-navy border-sky ring-2 ring-sky/70'
           : 'bg-cream text-navy border-navy/20 hover:bg-soft hover:border-inky'}`
       }
     >
@@ -36,7 +40,8 @@ function Card({ item, index, onGo }: { item: NavItem; index: number; onGo: () =>
             <span className="flex-1 truncate">{item.label}</span>
             {badge > 0 && <span className="flex-shrink-0 rounded-full bg-sb-red text-sb-cream text-[10px] font-mono leading-none px-1.5 py-0.5 min-w-[18px] text-center">{badge}</span>}
           </span>
-          {NAV_META[item.key]?.desc && <span className={`line-clamp-2 text-[11px] font-body leading-snug ${isActive ? 'text-sb-sky' : 'text-inky'}`}>{NAV_META[item.key].desc}</span>}
+          {NAV_META[item.key]?.desc && <span className="line-clamp-2 text-[11px] font-body leading-snug text-inky">{NAV_META[item.key].desc}</span>}
+          {pinned && <Pin className="absolute right-1.5 top-1.5 w-3 h-3 text-inky rotate-45" aria-label="Pinned" />}
         </>
       )}
     </NavLink>
@@ -64,7 +69,43 @@ function SectionButton({ section, active, open, labels, arrows, onToggle, onHove
   )
 }
 
-export function MegaNav() {
+/** The SB drop. With quick-access items it is the expand/collapse button for them: the buttons drop down over the page, and the drop glows green while any of them is open. */
+function QuickDrop({ items }: { items?: QuickAccessItem[] }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  const [pos, setPos] = useState({ left: 0, top: 0 })
+  const active = !!items?.some((f) => f.open)
+  useEffect(() => {
+    if (!open) return
+    const down = (e: MouseEvent) => { const t = e.target as Node; if (!ref.current?.contains(t) && !(t as HTMLElement).closest?.('[data-quick-drop]')) setOpen(false) }
+    const key = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    document.addEventListener('mousedown', down); document.addEventListener('keydown', key)
+    return () => { document.removeEventListener('mousedown', down); document.removeEventListener('keydown', key) }
+  }, [open])
+  const img = <img src={sbIcon} alt="SB Net" draggable={false} className="h-10 w-auto" />
+  if (!items || items.length === 0) return <span className="mr-1.5 flex-shrink-0">{img}</span>
+  return (
+    <div ref={ref} className="relative mr-1.5 flex-shrink-0">
+      <button type="button" aria-label={open ? 'Hide quick access' : 'Show quick access'} aria-expanded={open} title={open ? 'Hide quick access' : 'Quick access'}
+        onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setPos({ left: r.left + r.width / 2, top: r.bottom + 8 }); setOpen((o) => !o) }}
+        className={`rounded-full transition-shadow ${active ? 'shadow-[0_0_12px_3px_rgba(46,204,113,0.6)] ring-2 ring-sb-green' : 'hover:ring-2 hover:ring-chrome-fg/30'}`}>{img}</button>
+      {open && createPortal(
+        <div data-quick-drop style={{ position: 'fixed', left: pos.left, top: pos.top, transform: 'translateX(-50%)' }} className="z-[70] flex flex-col items-center gap-2 rounded-full bg-chrome p-1.5 shadow-[0_12px_30px_rgba(0,20,40,0.45)]">
+          {items.map((f, i) => (
+            <button key={f.key} type="button" onClick={f.onClick} title={f.open ? `${f.label} (open — click to close)` : f.label} aria-label={f.label} style={{ animationDelay: `${i * 40}ms` }}
+              className={`relative flex h-10 w-10 items-center justify-center rounded-full border-2 bg-sb-cream text-sb-navy animate-[fabRise_220ms_ease-out_backwards] ${f.open ? 'border-sb-green shadow-[0_0_12px_3px_rgba(46,204,113,0.5)]' : 'border-transparent hover:bg-sb-sky'}`}>
+              {f.icon}
+              {!!f.badge && <span className="absolute -right-1 -top-1 rounded-full bg-sb-red text-sb-cream text-[9px] font-mono leading-none px-1.5 py-0.5">{f.badge}</span>}
+            </button>
+          ))}
+        </div>,
+        document.body,
+      )}
+    </div>
+  )
+}
+
+export function MegaNav({ quickItems }: { quickItems?: QuickAccessItem[] } = {}) {
   const { sections, utility } = useNavModel()
   const { pathname } = useLocation()
   const [openKey, setOpenKey] = useState<string | null>(null)
@@ -74,6 +115,7 @@ export function MegaNav() {
   const panelRef = useRef<HTMLDivElement>(null)
   const btnRefs = useRef(new Map<string, HTMLButtonElement>())
 
+  const pin = usePinMenu()
   const { order, hidden } = useMegaPrefs()
   const all: NavSection[] = applyMegaPrefs([...sections, { key: 'shortcuts', label: 'Shortcuts', blurb: 'Calendar, tasks, issues and more', items: utility }], order, hidden)
   const hasActive = (items: NavItem[]) => items.some((i) => i.to && (pathname === i.to || pathname.startsWith(`${i.to}/`)))
@@ -129,7 +171,7 @@ export function MegaNav() {
   return (
     <>
       <nav ref={navRef} aria-label="Main" className="flex min-w-0 flex-1 items-center gap-0.5 overflow-hidden text-chrome-fg">
-        <img src={sbIcon} alt="SB Net" draggable={false} className="h-10 w-auto mr-1.5 flex-shrink-0" />
+        <QuickDrop items={quickItems} />
         <NavLink to={HOME_ITEM.to!} title={labels ? undefined : 'Home'} aria-label="Home"
           className={`flex flex-shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-3 py-1.5 text-[13px] font-heading font-semibold uppercase tracking-[0.07em] transition-colors ${homeActive ? 'bg-sky text-sb-navy' : 'text-chrome-fg hover:bg-inky/45'}`}>
           <span className="[&_svg]:w-4 [&_svg]:h-4">{ICONS.home}</span>{labels && 'Home'}
@@ -150,11 +192,12 @@ export function MegaNav() {
           className="z-[70] rounded-2xl border border-navy/20 bg-pop text-navy shadow-[0_20px_40px_rgba(0,0,0,0.28)] animate-[sbReveal_240ms_ease-out] max-h-[calc(100vh-80px)] overflow-y-auto">
           {current.blurb && <div className="mb-2 px-0.5 text-[10px] font-body uppercase tracking-[0.14em] text-inky">{current.label} · {current.blurb}</div>}
           <div className="grid" style={{ gridTemplateColumns: `repeat(${panelCols(current.items.length)}, ${CARD_W}px)`, gap: CARD_GAP }}>
-            {current.items.map((item, i) => <Card key={item.key} item={item} index={i} onGo={() => setOpenKey(null)} />)}
+            {current.items.map((item, i) => <Card key={item.key} item={item} index={i} onGo={() => setOpenKey(null)} pinned={pin.isPinned(item.key)} onContextMenu={pin.onContextMenu(item.key, item.label)} />)}
           </div>
         </div>,
         document.body,
       )}
+      {pin.element}
     </>
   )
 }
