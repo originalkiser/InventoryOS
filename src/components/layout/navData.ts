@@ -43,6 +43,7 @@ export const SECTION_ITEMS: Record<string, NavItem[]> = {
     { key: 'pricing-audit', label: 'Pricing Audit', to: '/pricing-audit' },
     { key: 'product-sales-history', label: 'Product Sales History', to: '/product-sales-history' },
     { key: 'staffing-report', label: 'Staffing Report', to: '/staffing-report' },
+    { key: 'gm-dexos-check', label: 'GM Warranty & Dexos', to: '/gm-dexos-check' },
   ],
   reladyne: [
     { key: 'mmr', label: 'MMR', to: '/mmr' },

@@ -29,6 +29,7 @@ export const NAV_META: Record<string, { desc: string; kw?: string }> = {
   'package-mapping': { desc: 'Classify packages as oil change or M5', kw: 'classification m5 oil change' },
   'pricing-audit': { desc: 'Check package and product pricing against the list', kw: 'price audit retail cost custom packages' },
   'product-sales-history': { desc: 'Sales by shop and period for chosen products', kw: 'product sales history' },
+  'gm-dexos-check': { desc: 'GM vehicles in warranty serviced with Dexos-approved oil', kw: 'gm dexos warranty oil compliance chevrolet gmc buick cadillac' },
   'staffing-report': { desc: 'Labor hours, LHCE and manager performance', kw: 'staffing labor hours lhce schedule' },
   'data-connections': { desc: 'Scheduled syncs, backfills and data health', kw: 'sync droptop monday skybitz backfill health schedule connection' },
   mmr: { desc: 'RelaDyne monthly management report', kw: 'reladyne gallons rebate' },

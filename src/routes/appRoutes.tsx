@@ -55,6 +55,7 @@ import { DroptopOrdersPage } from '@/modules/customers/DroptopOrdersPage'
 import { DroptopVehiclesPage } from '@/modules/customers/DroptopVehiclesPage'
 import { DroptopPackagesPage } from '@/modules/customers/DroptopPackagesPage'
 import { StaffingReportPage } from '@/modules/customers/StaffingReportPage'
+import { GmDexosCheckPage } from '@/modules/customers/GmDexosCheckPage'
 import { PackageMappingPage } from '@/modules/customers/PackageMappingPage'
 import { PricingAuditPage } from '@/modules/customers/pricingAudit/PricingAuditPage'
 import { ProductSalesHistoryPage } from '@/modules/customers/ProductSalesHistoryPage'
@@ -177,6 +178,7 @@ export const APP_ROUTE_ELEMENTS = (
     <Route path="droptop-vehicles" element={<DroptopVehiclesPage />} />
     <Route path="droptop-packages" element={<DroptopPackagesPage />} />
     <Route path="staffing-report" element={<StaffingReportPage />} />
+    <Route path="gm-dexos-check" element={<GmDexosCheckPage />} />
     <Route path="package-mapping" element={<PackageMappingPage />} />
     <Route path="pricing-audit" element={<PricingAuditPage />} />
     <Route path="product-sales-history" element={<ProductSalesHistoryPage />} />

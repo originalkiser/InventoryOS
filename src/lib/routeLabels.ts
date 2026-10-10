@@ -40,6 +40,7 @@ export const ROUTE_LABELS: Record<string, string> = {
   '/marketing-planner': 'Marketing Planner',
   '/customer-heatmap': 'Customer Heatmap',
   '/droptop-orders': 'Droptop Orders',
+  '/gm-dexos-check': 'GM Warranty & Dexos',
   '/mmr': 'MMR',
   '/schedule': 'Calendar',
   '/tasks': 'Tasks',

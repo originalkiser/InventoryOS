@@ -2,7 +2,7 @@ import {
   Package, Hammer, Settings, Building2, DollarSign, TrendingUp, Megaphone, Wrench, QrCode,
   LayoutDashboard, BarChart2, CalendarDays, ClipboardList, FolderKanban,
   Database, Users, AlertTriangle, MessageSquare, Lightbulb,
-  CheckCircle2, FileText, MapPin, GripVertical, Car, SlidersHorizontal, Home,
+  CheckCircle2, FileText, MapPin, GripVertical, Car, SlidersHorizontal, Home, ShieldCheck,
 } from 'lucide-react'
 import { BiRuler, BiSpreadsheet, BiAbacus, BiCommentError, BiUserVoice } from 'react-icons/bi'
 import { GrDatabase, GrMap } from 'react-icons/gr'
@@ -55,6 +55,7 @@ export const ICONS: Record<string, JSX.Element> = {
   'package-mapping': <ClipboardList className="w-4 h-4 flex-shrink-0" />,
   'pricing-audit': <DollarSign className="w-4 h-4 flex-shrink-0" />,
   'product-sales-history': <BarChart2 className="w-4 h-4 flex-shrink-0" />,
+  'gm-dexos-check': <ShieldCheck className="w-4 h-4 flex-shrink-0" />,
   'staffing-report': <Users className="w-4 h-4 flex-shrink-0" />,
   'data-connections': <GrDatabase className="w-4 h-4 flex-shrink-0" />,
   mmr: <BarChart2 className="w-4 h-4 flex-shrink-0" />,
