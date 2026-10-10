@@ -35,6 +35,7 @@ import { Button, Card, CardBody, Input, Modal, MultiSelectDropdown, Toggle } fro
 import { fetchDateRangeConcurrent } from '@/lib/concurrentDateRangeFetch'
 import { ColumnManagerModal, type ColItem } from '@/modules/locations/ColumnManagerModal'
 import { isM5, type Classification } from './PackageMappingPage'
+import { deriveSummary, useOrderRollups } from './droptopRollups'
 
 interface OrderRow {
   id: string
@@ -119,7 +120,7 @@ export function DroptopOrdersPage() {
   // Inventory-side pages), per explicit product decision 2026-09-01.
   const loc = useLocations('other')
   const earliestDate = useEarliestOrderDate(companyId)
-  const { period, setPeriod, customStart, setCustomStart, customEnd, setCustomEnd, range } = useDateRangePeriod('droptop-orders:period', 'last_week')
+  const { period, setPeriod, customStart, setCustomStart, customEnd, setCustomEnd, range } = useDateRangePeriod('droptop-orders:period', 'last_30_days')
 
   const [shopLabels, setShopLabels] = useState<string[]>([])
   const [loadAllShops, setLoadAllShops] = useState(false)
@@ -145,37 +146,6 @@ export function DroptopOrdersPage() {
   // a denominator, `loaded` ticks up per page.
   const [loadProgress, setLoadProgress] = useState<{ loaded: number; total: number | null }>({ loaded: 0, total: null })
 
-  // Fast SQL-side summary (get_droptop_orders_summary_stats, migration
-  // 20260930bl) — powers the stats cards WITHOUT needing the full raw
-  // per-order+package+product+service+vehicle fetch below. Found live
-  // 2026-09-24: a real 30-day/170k-order range took 4 minutes because the
-  // stats cards were computed client-side from that same full raw fetch —
-  // this RPC computes count/revenue/avg-order-value/quarts/M5%/By Package/
-  // By Shop directly in SQL and comes back in ~seconds regardless of range
-  // size, so the raw fetch (needed only for the paginated orders table,
-  // ad-hoc Package/Product/Vehicle/Fleet/Oil-Only/Search filters, and
-  // Build Your Own Report) no longer has to run automatically — see
-  // `detailRequested` below.
-  const [summaryStats, setSummaryStats] = useState<{
-    totals: { count: number; revenue: number; avg_order_value: number; avg_quarts_per_oil_order: number; m5_pct: number | null }
-    by_package: { name: string; count: number; avg_oil_quarts: number }[]
-    by_shop: { location_id: string | null; count: number; avg_quarts: number; m5_pct: number | null }[]
-  } | null>(null)
-  const [summaryLoading, setSummaryLoading] = useState(false)
-  const [summaryError, setSummaryError] = useState<string | null>(null)
-  // Elapsed-seconds counter for the summary load — found live 2026-09-24:
-  // a real 30-day range took up to 1:30, and a bare indeterminate pulse bar
-  // with no ticking number for that long reads as stuck/broken rather than
-  // "still working." This is the one visible sign of life for a load that
-  // (unlike the raw per-order fetch below) has no real page-count progress
-  // to report — it's a single SQL aggregation, not a paginated pull.
-  const [summaryElapsedSec, setSummaryElapsedSec] = useState(0)
-  useEffect(() => {
-    if (!summaryLoading) { setSummaryElapsedSec(0); return }
-    const startedAt = Date.now()
-    const id = setInterval(() => setSummaryElapsedSec(Math.floor((Date.now() - startedAt) / 1000)), 1000)
-    return () => clearInterval(id)
-  }, [summaryLoading])
 
   // Whether the user has explicitly asked to load full order-level detail
   // for the current scope — the slow raw fetch below only runs once this
@@ -254,60 +224,21 @@ export function DroptopOrdersPage() {
     if (shopIds.length) return allowedLocationIds ? shopIds.filter((id) => allowedLocationIds.has(id)) : shopIds
     return allowedLocationIds ? [...allowedLocationIds] : null
   }, [shopIds, allowedLocationIds])
-  // Only a genuinely unrestricted, named-period request (no shop/region/
-  // market/AM narrowing at all) is eligible for the once-daily cache below
-  // — anything narrower is cheap enough live (see 20260930bl's own timing:
-  // ~14s for a 7-day/40k-order single-shop-scale range) that caching every
-  // possible filter combination isn't worth the unbounded cache-key space.
-  const summaryCacheEligible = loadAllShops && summaryLocationIds === null && period !== 'custom'
-
-  // Fires independently of detailRequested/loading below — this is the
-  // fast path, so it runs as soon as a shop scope is picked (or "Load All
-  // Shops") regardless of whether the user ever asks for full order-level
-  // detail. Not gated behind shopIds.length the way the raw fetch is —
-  // get_droptop_orders_summary_stats aggregates in SQL rather than
-  // shipping rows, so an unscoped company-wide range isn't the slow path
-  // here the way it is for the raw fetch.
-  useEffect(() => {
-    if (!companyId) return
-    if (!shopIds.length && !loadAllShops) { setSummaryStats(null); setSummaryError(null); return }
-    let cancelled = false
-    setSummaryLoading(true)
-    setSummaryError(null)
-    const sb = supabase as any
-    const startIso = `${range.start}T00:00:00.000Z`
-    const endIso = `${range.end}T23:59:59.999Z`
-    const call = summaryCacheEligible
-      // Once-daily cache (inventory.droptop_orders_summary_cache, migration
-      // 20260930bm) — direct feedback 2026-09-24: "the pre-filled periods
-      // should boast quicker loading times, can we cache that data daily".
-      // Company-wide only (p_location_ids is always NULL here, matching
-      // summaryCacheEligible's own gate) — a cache hit for today returns
-      // instantly, a miss computes live and stores it for the rest of
-      // today. A period that includes today (Week to Date, Month to Date,
-      // Last 3 Months) will show its count as of whenever it was FIRST
-      // computed today, not update again until tomorrow — accepted as the
-      // literal "cache daily" ask rather than a shorter TTL.
-      ? sb.rpc('get_droptop_orders_summary_stats_cached', {
-          p_company_id: companyId,
-          p_period_key: period,
-          p_start: startIso,
-          p_end: endIso,
-        })
-      : sb.rpc('get_droptop_orders_summary_stats', {
-          p_company_id: companyId,
-          p_start: startIso,
-          p_end: endIso,
-          p_location_ids: summaryLocationIds,
-        })
-    call.then(({ data, error: err }: any) => {
-      if (cancelled) return
-      if (err) { setSummaryError(err.message); setSummaryStats(null) }
-      else setSummaryStats(data ?? null)
-      setSummaryLoading(false)
-    })
-    return () => { cancelled = true }
-  }, [companyId, range.start, range.end, shopIds.join(','), loadAllShops, period, summaryCacheEligible, (summaryLocationIds ?? []).join(',')]) // eslint-disable-line react-hooks/exhaustive-deps
+  // Summary numbers come from the daily rollup RPCs (get_sales_by_day / get_package_mix / get_product_mix / get_vehicle_makes — see
+  // droptopRollups.ts): as of the last 8am/9am ET refresh, not live, and fast at any range, so there is no separate cache path any more. Shop
+  // scope = summaryLocationIds (null = all shops). The Vehicle Make filter applies to these numbers; the Package/Product/Vehicle/Fleet/Oil
+  // Only/Search filters still apply to order-level detail only, as before.
+  const [vehicleMakes, setVehicleMakes] = useState<string[]>([])
+  const rollups = useOrderRollups(!!companyId && (shopIds.length > 0 || loadAllShops), {
+    start: range.start, end: range.end, locationIds: summaryLocationIds, vehicleMakes,
+  })
+  const summaryStats = useMemo(
+    () => (rollups.data ? deriveSummary(rollups.data.sales, rollups.data.packageMix, rollups.data.productMix, packageClassification) : null),
+    [rollups.data, packageClassification],
+  )
+  const summaryLoading = rollups.loading
+  const summaryError = rollups.error
+  const makeOptions = useMemo(() => (rollups.data?.makes ?? []).map((m) => ({ value: m.vehicle_make, count: m.orders })), [rollups.data])
 
   // Extracted out of what used to be the raw-fetch effect's own inline
   // body so the "Load data for this shop" quick-load (below, from the
@@ -915,20 +846,23 @@ export function DroptopOrdersPage() {
         m5Pct: summaryStats.totals.m5_pct,
       }
     : totals
+  // The rollups carry packages sold and revenue (not avg oil quarts per package); once order detail loads the client numbers show avg oil instead.
   const effectivePackageStats = useSummaryStats && summaryStats
-    ? summaryStats.by_package.map((p) => ({ name: p.name, count: p.count, avgOilQuarts: p.avg_oil_quarts }))
-    : packageStats
+    ? summaryStats.by_package.map((p) => ({ name: p.name, count: p.sold, avgOilQuarts: 0, revenue: p.revenue as number | null }))
+    : packageStats.map((p) => ({ ...p, revenue: null as number | null }))
+  // Per-shop avg quarts / M5% aren't in the rollups (package mix isn't broken out by shop), so the summary view shows orders + revenue instead.
   const effectiveShopStats = useSummaryStats && summaryStats
     ? summaryStats.by_shop
         .map((s) => ({
           locationId: s.location_id ?? '—',
           shopLabel: s.location_id ? (idToLabel.get(s.location_id) ?? s.location_id) : '—',
           count: s.count,
-          avgQuarts: s.avg_quarts,
-          m5Pct: s.m5_pct,
+          avgQuarts: 0,
+          m5Pct: null as number | null,
+          revenue: s.revenue as number | null,
         }))
         .sort((a, b) => a.shopLabel.localeCompare(b.shopLabel, undefined, { numeric: true }))
-    : shopStats
+    : shopStats.map((s) => ({ ...s, revenue: null as number | null }))
 
   // ---- Build Your Own Report ------------------------------------------
   // Operates on whatever's already loaded (filteredOrders — respects the
@@ -1127,7 +1061,15 @@ export function DroptopOrdersPage() {
             Search, filter, and summarize synced orders. Populated by Config → Data Connections' Droptop — Orders sync.
           </p>
         </div>
-        <DataCompletenessBadge connectionKey="droptop_orders" />
+        <div className="flex flex-col items-end gap-1">
+          <DataCompletenessBadge connectionKey="droptop_orders" />
+          {(shopIds.length > 0 || loadAllShops) && (
+            <span className="text-[10px] font-mono text-inky/70" title="The summary reads daily rollups refreshed at 8am and 9am ET — it isn't live.">
+              {summaryStats?.dataThrough ? `Data through ${summaryStats.dataThrough}` : summaryStats ? 'No orders in this range' : ''}
+              {summaryLoading && summaryStats ? ' · updating…' : ''}
+            </span>
+          )}
+        </div>
       </div>
 
       {/* Filters — Region/Market/AM/Shop(s) first (narrows top-down), then
@@ -1164,6 +1106,10 @@ export function DroptopOrdersPage() {
         <div className="flex flex-col gap-0.5">
           <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Product ID</span>
           <MultiSelectDropdown options={productIdOptions} selected={productIdFilters} onChange={setProductIdFilters} placeholder="All Products" countNoun="products" searchable />
+        </div>
+        <div className="flex flex-col gap-0.5">
+          <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide" title="Filters the summary above by the order's first vehicle's make">Vehicle Make</span>
+          <MultiSelectDropdown options={makeOptions} selected={vehicleMakes} onChange={setVehicleMakes} placeholder="All Makes" countNoun="makes" searchable />
         </div>
         <div className="flex flex-col gap-0.5">
           <span className="text-[10px] font-mono text-inky/60 uppercase tracking-wide">Vehicle</span>
@@ -1203,7 +1149,7 @@ export function DroptopOrdersPage() {
       ) : (
         <>
           {/* High-level stats — from the fast SQL summary
-              (get_droptop_orders_summary_stats) until order-level detail is
+              (the daily rollup RPCs, see droptopRollups.ts) until order-level detail is
               explicitly requested below, then from the client-computed
               totals/packageStats/shopStats so any ad-hoc Package/Product/
               Vehicle/Fleet/Oil-Only/Search filter is reflected (the summary
@@ -1214,8 +1160,8 @@ export function DroptopOrdersPage() {
           {useSummaryStats && summaryLoading && !summaryStats ? (
             <LoadingProgress
               fraction={null}
-              countText={`Loading summary — ${summaryElapsedSec}s elapsed${summaryElapsedSec > 15 ? ' (a large date range can take a minute or more — this runs in the database, not a per-order download)' : ''}`}
-              messages={['Aggregating orders…', 'Tallying packages by shop…']}
+              countText="Loading summary…"
+              messages={['Reading the daily rollups…', 'Tallying packages by shop…']}
             />
           ) : useSummaryStats && summaryError && !summaryStats ? (
             <p className="text-xs font-mono text-[#C0392B] border border-[#C0392B]/30 bg-[#C0392B]/5 rounded px-2 py-1.5">{summaryError}</p>
@@ -1264,7 +1210,7 @@ export function DroptopOrdersPage() {
                             <tr className="border-b border-navy/30 text-inky uppercase tracking-wide">
                               <th className="px-3 py-2 text-left">Package</th>
                               <th className="px-3 py-2 text-right">Count</th>
-                              <th className="px-3 py-2 text-right">Avg Oil (Qts)</th>
+                              {useSummaryStats ? <th className="px-3 py-2 text-right">Revenue</th> : <th className="px-3 py-2 text-right">Avg Oil (Qts)</th>}
                             </tr>
                           </thead>
                           <tbody>
@@ -1272,7 +1218,7 @@ export function DroptopOrdersPage() {
                               <tr key={s.name} className="border-b border-navy/10">
                                 <td className="px-3 py-1.5 text-navy">{s.name}</td>
                                 <td className="px-3 py-1.5 text-navy text-right">{s.count.toLocaleString()}</td>
-                                <td className="px-3 py-1.5 text-navy text-right">{s.avgOilQuarts > 0 ? s.avgOilQuarts.toFixed(2) : '—'}</td>
+                                <td className="px-3 py-1.5 text-navy text-right">{useSummaryStats ? money(s.revenue) : s.avgOilQuarts > 0 ? s.avgOilQuarts.toFixed(2) : '—'}</td>
                               </tr>
                             ))}
                           </tbody>
@@ -1294,8 +1240,7 @@ export function DroptopOrdersPage() {
                             <tr className="border-b border-navy/30 text-inky uppercase tracking-wide">
                               <th className="px-3 py-2 text-left">Shop</th>
                               <th className="px-3 py-2 text-right">Orders</th>
-                              <th className="px-3 py-2 text-right">Avg Quarts / Order</th>
-                              <th className="px-3 py-2 text-right">M5%</th>
+                              {useSummaryStats ? <th className="px-3 py-2 text-right">Revenue</th> : <><th className="px-3 py-2 text-right">Avg Quarts / Order</th><th className="px-3 py-2 text-right">M5%</th></>}
                             </tr>
                           </thead>
                           <tbody>
@@ -1305,8 +1250,12 @@ export function DroptopOrdersPage() {
                                 onClick={() => { setReportShops(s.locationId === '—' ? [] : [s.shopLabel]); setReportRegions([]); setReportMarkets([]); setReportAMs([]); setReportMode('detail'); setReportPage(0); setReportOpen(true) }}>
                                 <td className="px-3 py-1.5 text-navy whitespace-nowrap underline decoration-dotted">{s.shopLabel}</td>
                                 <td className="px-3 py-1.5 text-navy text-right">{s.count.toLocaleString()}</td>
-                                <td className="px-3 py-1.5 text-navy text-right">{s.avgQuarts > 0 ? s.avgQuarts.toFixed(2) : '—'}</td>
-                                <td className="px-3 py-1.5 text-navy text-right">{s.m5Pct != null ? `${s.m5Pct.toFixed(1)}%` : '—'}</td>
+                                {useSummaryStats
+                                  ? <td className="px-3 py-1.5 text-navy text-right">{money(s.revenue)}</td>
+                                  : <>
+                                      <td className="px-3 py-1.5 text-navy text-right">{s.avgQuarts > 0 ? s.avgQuarts.toFixed(2) : '—'}</td>
+                                      <td className="px-3 py-1.5 text-navy text-right">{s.m5Pct != null ? `${s.m5Pct.toFixed(1)}%` : '—'}</td>
+                                    </>}
                               </tr>
                             ))}
                           </tbody>

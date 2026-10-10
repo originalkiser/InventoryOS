@@ -137,7 +137,7 @@ export function MegaNav() {
         {all.map((s) => (
           <SectionButton key={s.key} section={s} labels={labels} arrows={arrows} active={hasActive(s.items)} open={openKey === s.key}
             btnRef={(el) => { if (el) btnRefs.current.set(s.key, el); else btnRefs.current.delete(s.key) }}
-            onToggle={() => (openKey === s.key ? setOpenKey(null) : openSection(s.key))} onHover={() => { if (openKey) openSection(s.key) }} />
+            onToggle={() => openSection(s.key)} onHover={() => { if (openKey) openSection(s.key) }} />
         ))}
         <button type="button" onClick={() => window.dispatchEvent(new Event('sb-open-palette'))} aria-label="Search pages and actions" title="Search (Ctrl K)"
           className="ml-1 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full text-chrome-fg hover:bg-inky/45 transition-colors">
