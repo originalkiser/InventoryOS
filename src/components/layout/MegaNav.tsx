@@ -10,6 +10,7 @@ import sbIcon from '@/assets/SBOC-IconCream.png'
 import { useNavBadge, useNavBadgeSum } from '@/hooks/useNavBadges'
 import { ICONS, SECTION_ICONS } from './navIcons'
 import { NAV_META } from './navMeta'
+import { useMegaPrefs, applyMegaPrefs } from '@/hooks/useNavLayout'
 import { CARD_W, CARD_GAP, PANEL_PAD, centeredLeft, panelCols, panelWidth } from './navPanel'
 import { HOME_ITEM, useNavModel, type NavSection } from './useNavModel'
 import type { NavItem } from './navData'
@@ -50,15 +51,15 @@ function SectionButton({ section, active, open, labels, onToggle, onHover, btnRe
     <button
       ref={btnRef} type="button" aria-haspopup="true" aria-expanded={open} aria-label={section.label} title={labels ? undefined : section.label}
       onClick={onToggle} onMouseEnter={onHover}
-      className={`relative flex flex-shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] font-heading font-semibold uppercase tracking-[0.07em] transition-colors ${active ? 'bg-sky text-sb-navy' : open ? 'bg-inky/50 text-chrome-fg' : 'text-chrome-fg hover:bg-inky/45'}`}
+      className={`relative flex flex-shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-3 py-1.5 text-[13px] font-heading font-semibold uppercase tracking-[0.07em] transition-colors ${active ? 'bg-sky text-sb-navy' : open ? 'bg-inky/50 text-chrome-fg' : 'text-chrome-fg hover:bg-inky/45'}`}
     >
       {/* The section icon is sky-colored for some sections — never let it vanish on the sky "you are here" pill. */}
-      <span className={`flex-shrink-0 [&_svg]:w-3.5 [&_svg]:h-3.5 [&_img]:w-3.5 [&_img]:h-3.5 ${active ? '[&_svg]:!text-sb-navy' : ''}`}>{SECTION_ICONS[section.key]}</span>
+      <span className={`flex-shrink-0 [&_svg]:w-4 [&_svg]:h-4 [&_img]:w-4 [&_img]:h-4 ${active ? '[&_svg]:!text-sb-navy' : ''}`}>{SECTION_ICONS[section.key]}</span>
       {labels && section.label}
       {badge > 0 && (labels
         ? <span className="rounded-full bg-sb-navy text-sb-cream text-[9px] font-mono leading-none px-1.5 py-0.5 min-w-[16px] text-center">{badge}</span>
         : <span className="absolute -top-0.5 -right-0.5 rounded-full bg-sb-red text-sb-cream text-[9px] font-mono leading-none px-1 py-0.5 min-w-[14px] text-center">{badge}</span>)}
-      {labels && <ChevronDown className={`w-3 h-3 transition-transform ${open ? 'rotate-180' : ''}`} />}
+      {labels && <ChevronDown className={`w-3.5 h-3.5 transition-transform ${open ? 'rotate-180' : ''}`} />}
     </button>
   )
 }
@@ -75,7 +76,8 @@ export function MegaNav() {
   const btnRefs = useRef(new Map<string, HTMLButtonElement>())
   const fullWidth = useRef(0)
 
-  const all: NavSection[] = [...sections, { key: 'shortcuts', label: 'Shortcuts', blurb: 'Calendar, tasks, issues and more', items: utility }]
+  const { order, hidden } = useMegaPrefs()
+  const all: NavSection[] = applyMegaPrefs([...sections, { key: 'shortcuts', label: 'Shortcuts', blurb: 'Calendar, tasks, issues and more', items: utility }], order, hidden)
   const hasActive = (items: NavItem[]) => items.some((i) => i.to && (pathname === i.to || pathname.startsWith(`${i.to}/`)))
   const current = all.find((s) => s.key === openKey)
   const homeActive = pathname === HOME_ITEM.to
@@ -126,10 +128,10 @@ export function MegaNav() {
   return (
     <>
       <nav ref={navRef} aria-label="Main" className="flex min-w-0 flex-1 items-center gap-0.5 overflow-hidden text-chrome-fg">
-        <img src={sbIcon} alt="SB Net" className="h-6 w-auto mr-1 flex-shrink-0 opacity-90" />
+        <img src={sbIcon} alt="SB Net" draggable={false} className="h-10 w-auto mr-1.5 flex-shrink-0" />
         <NavLink to={HOME_ITEM.to!} title={labels ? undefined : 'Home'} aria-label="Home"
-          className={`flex flex-shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] font-heading font-semibold uppercase tracking-[0.07em] transition-colors ${homeActive ? 'bg-sky text-sb-navy' : 'text-chrome-fg hover:bg-inky/45'}`}>
-          <span className="[&_svg]:w-3.5 [&_svg]:h-3.5">{ICONS.home}</span>{labels && 'Home'}
+          className={`flex flex-shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-3 py-1.5 text-[13px] font-heading font-semibold uppercase tracking-[0.07em] transition-colors ${homeActive ? 'bg-sky text-sb-navy' : 'text-chrome-fg hover:bg-inky/45'}`}>
+          <span className="[&_svg]:w-4 [&_svg]:h-4">{ICONS.home}</span>{labels && 'Home'}
         </NavLink>
         {all.map((s) => (
           <SectionButton key={s.key} section={s} labels={labels} active={hasActive(s.items)} open={openKey === s.key}
@@ -137,8 +139,8 @@ export function MegaNav() {
             onToggle={() => (openKey === s.key ? setOpenKey(null) : openSection(s.key))} onHover={() => { if (openKey) openSection(s.key) }} />
         ))}
         <button type="button" onClick={() => window.dispatchEvent(new Event('sb-open-palette'))} aria-label="Search pages and actions" title="Search (Ctrl K)"
-          className="ml-1 flex flex-shrink-0 items-center gap-1.5 rounded-full border border-chrome-fg/40 px-2 py-1 text-[11px] font-body text-chrome-fg hover:border-chrome-fg hover:bg-inky/35 transition-colors">
-          <Search className="w-3.5 h-3.5" />{labels && 'Search'}
+          className="ml-1 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full text-chrome-fg hover:bg-inky/45 transition-colors">
+          <Search className="w-[18px] h-[18px]" />
         </button>
       </nav>
       {current && anchor && createPortal(

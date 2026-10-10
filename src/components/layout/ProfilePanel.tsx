@@ -6,7 +6,8 @@ import { usePinnedPanelStore } from '@/stores/pinnedPanelStore'
 import { useDarkMode } from '@/hooks/useDarkMode'
 import { FONT_GROUPS, useFontGroup } from '@/hooks/useFontGroup'
 import { COLOR_THEMES, useColorTheme } from '@/hooks/useColorTheme'
-import { NAV_LAYOUTS, useDockPrefs, useNavAccordion, useNavLayout } from '@/hooks/useNavLayout'
+import { NAV_LAYOUTS, useDockPrefs, useMegaPrefs, applyMegaPrefs, useNavAccordion, useNavLayout } from '@/hooks/useNavLayout'
+import { useNavModel } from './useNavModel'
 import { PAGE_ANIMATIONS, usePageAnimation } from '@/hooks/usePageAnimation'
 import { TABLE_STYLES, useTableStyle } from '@/hooks/useTableStyle'
 import { useProfilePref } from '@/hooks/useProfilePrefs'
@@ -53,9 +54,11 @@ interface ProfilePanelProps {
   notifPrefs: NotifPrefs
   setNotifPrefs: (p: NotifPrefs) => void
   requestPermission: () => Promise<NotificationPermission>
+  /** Opens the End Day review (it also takes over the Profile button once the end-of-day time has passed). */
+  onEndDay?: () => void
 }
 
-export function ProfilePanel({ onClose, canNotify, permission, notifPrefs, setNotifPrefs, requestPermission }: ProfilePanelProps) {
+export function ProfilePanel({ onClose, canNotify, permission, notifPrefs, setNotifPrefs, requestPermission, onEndDay }: ProfilePanelProps) {
   const { profile, setProfile } = useAuthStore()
   // Same fix as Modal.tsx: this is a full-screen centered overlay that used
   // to render behind a docked side panel (z-65) since it was only z-50, and
@@ -69,6 +72,17 @@ export function ProfilePanel({ onClose, canNotify, permission, notifPrefs, setNo
   const { theme: colorTheme, setTheme: setColorTheme } = useColorTheme()
   const { layout: navLayout, setLayout: setNavLayout } = useNavLayout()
   const { prefs: dockPrefs, update: updateDock } = useDockPrefs()
+  // Mega menu sections: all the user can reach (plus Shortcuts), in their order, each with a show/hide checkbox.
+  const { sections: navSections } = useNavModel()
+  const mega = useMegaPrefs()
+  const megaAll = applyMegaPrefs([...navSections.map((s) => ({ key: s.key, label: s.label })), { key: 'shortcuts', label: 'Shortcuts' }], mega.order, [])
+  const moveMega = (key: string, dir: -1 | 1) => {
+    const keys = megaAll.map((s) => s.key)
+    const i = keys.indexOf(key), j = i + dir
+    if (i < 0 || j < 0 || j >= keys.length) return
+    ;[keys[i], keys[j]] = [keys[j], keys[i]]
+    mega.setOrder(keys)
+  }
   const [navAccordion, setNavAccordion] = useNavAccordion()
   const [pinnedMode, setPinnedMode] = useProfilePref<'section' | 'always'>('nav:pinnedMode', 'section')
   const { animation: pageAnim, setAnimation: setPageAnim } = usePageAnimation()
@@ -200,6 +214,12 @@ export function ProfilePanel({ onClose, canNotify, permission, notifPrefs, setNo
               {getRoleLabel(profile?.role)}
             </div>
           </div>
+          {onEndDay && (
+            <button type="button" onClick={() => { onClose(); onEndDay() }}
+              className="flex-shrink-0 rounded-lg border border-navy/30 dark:border-[#F2F1E6]/30 px-3 py-1.5 text-xs font-heading uppercase tracking-wide text-navy dark:text-[#F2F1E6] hover:bg-sky/30 transition-colors">
+              End Day
+            </button>
+          )}
         </div>
 
         {/* 3 columns: identity/frequent, workspace, schedule. Each column
@@ -243,6 +263,23 @@ export function ProfilePanel({ onClose, canNotify, permission, notifPrefs, setNo
                       </span>
                     </label>
                   ))}
+                  <div className={`mt-1 flex flex-col gap-1 pl-0.5 ${navLayout === 'mega' ? '' : 'opacity-50'}`}>
+                    <span className="text-[11px] font-body text-navy dark:text-[#F2F1E6]">Mega menu: sections in the bar</span>
+                    <div className="flex flex-col gap-0.5">
+                      {megaAll.map((s, i) => (
+                        <div key={s.key} className="flex items-center gap-1.5">
+                          <input type="checkbox" className="accent-sky" disabled={navLayout !== 'mega'} checked={!mega.hidden.includes(s.key)}
+                            onChange={(e) => mega.setHidden(e.target.checked ? mega.hidden.filter((k) => k !== s.key) : [...mega.hidden, s.key])} aria-label={`Show ${s.label}`} />
+                          <span className="flex-1 text-xs font-body text-navy dark:text-[#F2F1E6]">{s.label}</span>
+                          <button type="button" disabled={navLayout !== 'mega' || i === 0} onClick={() => moveMega(s.key, -1)} aria-label={`Move ${s.label} up`}
+                            className="px-1.5 text-xs text-navy dark:text-[#F2F1E6] disabled:opacity-30 hover:text-inky">▲</button>
+                          <button type="button" disabled={navLayout !== 'mega' || i === megaAll.length - 1} onClick={() => moveMega(s.key, 1)} aria-label={`Move ${s.label} down`}
+                            className="px-1.5 text-xs text-navy dark:text-[#F2F1E6] disabled:opacity-30 hover:text-inky">▼</button>
+                        </div>
+                      ))}
+                    </div>
+                    <span className="text-[10px] font-body text-navy/60 dark:text-[#F2F1E6]/70">Hidden sections stay reachable with search (Ctrl K), and you can add their pages to your Home page.</span>
+                  </div>
                   <div className={`mt-1 flex flex-col gap-1 pl-0.5 ${navLayout === 'dock' ? '' : 'opacity-50'}`}>
                     <span className="text-[11px] font-body text-navy dark:text-[#F2F1E6]">Floating dock: position</span>
                     <div className="flex flex-wrap gap-1">

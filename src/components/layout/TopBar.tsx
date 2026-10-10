@@ -622,7 +622,7 @@ export function TopBar({
     .map((key) => ({ key, ...ALL_PILLS[key] }))
 
   return (
-    <header className="relative min-h-[3rem] bg-chrome border-b border-chrome/40 flex items-center px-3 gap-2 flex-shrink-0 flex-wrap py-1.5">
+    <header className={`relative ${navSlot ? 'min-h-[3.6rem]' : 'min-h-[3rem]'} bg-chrome border-b border-chrome/40 flex items-center px-3 gap-2 flex-shrink-0 flex-wrap py-1.5`}>
       {/* Mobile hamburger */}
       {mobile ? (
         <button
@@ -667,35 +667,33 @@ export function TopBar({
 
       {/* Recent Pages is the leftmost of this trailing group; Sync Status
           sits directly next to End Day. */}
-      <RecentPagesWidget />
+      <RecentPagesWidget overlay={!!navSlot} />
       <PresenceWidget />
       <SyncStatusWidget />
 
-      {/* End Day */}
-      <button
-        onClick={() => setEndDayOpen(true)}
-        title="End of day check-in"
-        className={[
-          'flex-shrink-0 flex items-center gap-1 h-7 px-2 rounded border text-[10px] font-heading uppercase tracking-wide transition-all',
-          eodGlow
-            ? 'border-orange-500/70 text-orange-400 shadow-[0_0_10px_2px_rgba(249,115,22,0.45)] animate-pulse'
-            : 'border-chrome-fg/20 text-chrome-fg/70 hover:text-chrome-fg hover:border-chrome-fg/40',
-        ].join(' ')}
-      >
-        End Day
-      </button>
-
-      {/* Profile — moved here from the sidebar footer */}
-      <button
-        onClick={() => setProfileOpen(true)}
-        title="Profile"
-        className="flex-shrink-0 flex items-center gap-1.5 h-7 pl-1 pr-2 rounded border border-chrome-fg/20 text-chrome-fg/70 hover:text-chrome-fg hover:border-chrome-fg/40 transition-all"
-      >
-        <span className="w-5 h-5 rounded-full bg-[#4F7489] flex items-center justify-center text-[9px] font-heading text-chrome-fg flex-shrink-0">
-          {profileInitials}
-        </span>
-        {!mobile && <span className="text-[10px] font-heading uppercase tracking-wide truncate max-w-[100px]">{profile?.full_name ?? profile?.email ?? 'Profile'}</span>}
-      </button>
+      {/* Profile. From the end-of-day prompt until the day is ended (or the date rolls over) this button becomes a glowing End Day button; the
+          initials circle stays a separate target for the Profile menu. End Day is otherwise in the Profile menu. */}
+      {eodGlow ? (
+        <div className="flex-shrink-0 flex items-center h-8 rounded border border-orange-500/70 text-orange-400 shadow-[0_0_10px_2px_rgba(249,115,22,0.45)] animate-pulse">
+          <button onClick={() => setProfileOpen(true)} title="Profile" className="h-full pl-1 pr-1 flex items-center">
+            <span className="w-5 h-5 rounded-full bg-[#4F7489] flex items-center justify-center text-[9px] font-heading text-chrome-fg flex-shrink-0">{profileInitials}</span>
+          </button>
+          <button onClick={() => setEndDayOpen(true)} title="End of day check-in" className="h-full pr-2.5 pl-1 text-[11px] font-heading uppercase tracking-wide">
+            End Day
+          </button>
+        </div>
+      ) : (
+        <button
+          onClick={() => setProfileOpen(true)}
+          title="Profile"
+          className="flex-shrink-0 flex items-center gap-1.5 h-8 pl-1 pr-2 rounded border border-chrome-fg/20 text-chrome-fg/70 hover:text-chrome-fg hover:border-chrome-fg/40 transition-all"
+        >
+          <span className="w-5 h-5 rounded-full bg-[#4F7489] flex items-center justify-center text-[9px] font-heading text-chrome-fg flex-shrink-0">
+            {profileInitials}
+          </span>
+          {!mobile && <span className="text-[10px] font-heading uppercase tracking-wide truncate max-w-[100px]">{profile?.full_name ?? profile?.email ?? 'Profile'}</span>}
+        </button>
+      )}
       {profileOpen && (
         <ProfilePanel
           onClose={() => setProfileOpen(false)}
@@ -704,6 +702,7 @@ export function TopBar({
           notifPrefs={notifPrefs}
           setNotifPrefs={setNotifPrefs}
           requestPermission={requestPermission}
+          onEndDay={() => setEndDayOpen(true)}
         />
       )}
 

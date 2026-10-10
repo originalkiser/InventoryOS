@@ -18,7 +18,8 @@ import { useRecentPagesStore } from '@/stores/recentPagesStore'
 const PIN_TIMEOUT_MS = 4000
 const PULSE_MS = 1500
 
-export function RecentPagesWidget() {
+/** `overlay`: the numbered buttons open over whatever is to the left (the mega menu) instead of pushing it narrower. */
+export function RecentPagesWidget({ overlay = false }: { overlay?: boolean }) {
   const navigate = useNavigate()
   const recentPages = useRecentPagesStore((s) => s.recentPages)
   const activePath = useRecentPagesStore((s) => s.activePath)
@@ -108,7 +109,7 @@ export function RecentPagesWidget() {
   }, [label, open])
 
   return (
-    <div className={`relative flex items-center flex-shrink-0 ${open ? 'gap-1.5' : 'gap-0'}`} ref={ref}>
+    <div className={`relative flex items-center flex-shrink-0 ${open && !overlay ? 'gap-1.5' : 'gap-0'}`} ref={ref}>
       <button
         onClick={toggleOpen}
         title="Recent pages — Alt+← / Alt+→ / Ctrl+K"
@@ -123,8 +124,10 @@ export function RecentPagesWidget() {
       {/* Inline reveal — grows in the TopBar row itself, not a dropdown. At
           most 3 buttons, one per tracked page, numbered by ring position —
           no grouping/paging, since the ring itself never holds more than 3. */}
-      <div className={`overflow-visible transition-[max-width,opacity] duration-300 ease-out ${open && recentPages.length > 0 ? 'max-w-[160px] opacity-100' : 'max-w-0 opacity-0'}`}>
-        <div className="flex items-center gap-2 pl-0.5">
+      <div className={overlay
+        ? `absolute right-full top-1/2 z-30 -translate-y-1/2 pr-1.5 transition-[opacity,transform] duration-300 ease-out origin-right ${open && recentPages.length > 0 ? 'opacity-100 scale-100' : 'pointer-events-none opacity-0 scale-75'}`
+        : `overflow-visible transition-[max-width,opacity] duration-300 ease-out ${open && recentPages.length > 0 ? 'max-w-[160px] opacity-100' : 'max-w-0 opacity-0'}`}>
+        <div className={`flex items-center gap-2 pl-0.5 ${overlay ? 'rounded-full bg-chrome px-1.5 py-1 shadow-[0_6px_18px_rgba(0,20,40,0.4)]' : ''}`}>
           {recentPages.map((page, i) => (
             <button
               key={page.path}

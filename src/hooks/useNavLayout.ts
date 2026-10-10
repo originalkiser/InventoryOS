@@ -49,3 +49,17 @@ export function dockReserve(layout: NavLayout, prefs: DockPrefs): { left: number
   if (layout === 'dock' && prefs.snap !== 'none') r[prefs.snap] = DOCK_THICKNESS
   return r
 }
+
+// ── Mega menu: which sections show in the bar and in what order (Profile -> Navigation) ───────────────────────────────────────────────────
+export function useMegaPrefs() {
+  const [order, setOrder] = useProfilePref<string[]>('nav:megaOrder', [])
+  const [hidden, setHidden] = useProfilePref<string[]>('nav:megaHidden', [])
+  return { order, setOrder, hidden, setHidden }
+}
+
+/** The user's own order first (sections they haven't ordered yet follow in their normal order), minus the ones they turned off. */
+export function applyMegaPrefs<T extends { key: string }>(items: T[], order: string[], hidden: string[]): T[] {
+  const rank = new Map(order.map((k, i) => [k, i]))
+  const sorted = items.map((it, i) => ({ it, i })).sort((a, b) => (rank.get(a.it.key) ?? 1000 + a.i) - (rank.get(b.it.key) ?? 1000 + b.i))
+  return sorted.map((x) => x.it).filter((it) => !hidden.includes(it.key))
+}
