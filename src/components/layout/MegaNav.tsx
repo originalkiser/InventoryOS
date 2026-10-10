@@ -43,8 +43,8 @@ function Card({ item, index, onGo }: { item: NavItem; index: number; onGo: () =>
   )
 }
 
-function SectionButton({ section, active, open, labels, onToggle, onHover, btnRef }: {
-  section: NavSection; active: boolean; open: boolean; labels: boolean; onToggle: () => void; onHover: () => void; btnRef: (el: HTMLButtonElement | null) => void
+function SectionButton({ section, active, open, labels, arrows, onToggle, onHover, btnRef }: {
+  section: NavSection; active: boolean; open: boolean; labels: boolean; arrows: boolean; onToggle: () => void; onHover: () => void; btnRef: (el: HTMLButtonElement | null) => void
 }) {
   const badge = useNavBadgeSum(section.items.map((i) => i.key))
   return (
@@ -59,7 +59,7 @@ function SectionButton({ section, active, open, labels, onToggle, onHover, btnRe
       {badge > 0 && (labels
         ? <span className="rounded-full bg-sb-navy text-sb-cream text-[9px] font-mono leading-none px-1.5 py-0.5 min-w-[16px] text-center">{badge}</span>
         : <span className="absolute -top-0.5 -right-0.5 rounded-full bg-sb-red text-sb-cream text-[9px] font-mono leading-none px-1 py-0.5 min-w-[14px] text-center">{badge}</span>)}
-      {labels && <ChevronDown className={`w-3.5 h-3.5 transition-transform ${open ? 'rotate-180' : ''}`} />}
+      {labels && arrows && <ChevronDown className={`w-3.5 h-3.5 transition-transform ${open ? 'rotate-180' : ''}`} />}
     </button>
   )
 }
@@ -68,13 +68,11 @@ export function MegaNav() {
   const { sections, utility } = useNavModel()
   const { pathname } = useLocation()
   const [openKey, setOpenKey] = useState<string | null>(null)
-  const [labels, setLabels] = useState(true)
   const [anchor, setAnchor] = useState<{ cx: number; bottom: number } | null>(null)
   const [vw, setVw] = useState(() => window.innerWidth)
   const navRef = useRef<HTMLElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
   const btnRefs = useRef(new Map<string, HTMLButtonElement>())
-  const fullWidth = useRef(0)
 
   const { order, hidden } = useMegaPrefs()
   const all: NavSection[] = applyMegaPrefs([...sections, { key: 'shortcuts', label: 'Shortcuts', blurb: 'Calendar, tasks, issues and more', items: utility }], order, hidden)
@@ -84,22 +82,25 @@ export function MegaNav() {
 
   useEffect(() => { setOpenKey(null) }, [pathname])
 
-  // Labels when they all fit, icons only when they don't — so the bar never needs to scroll.
-  useLayoutEffect(() => { fullWidth.current = 0; setLabels(true) }, [all.length])
+  // Labels when they all fit, icons only when they don't — so the bar never needs to scroll. The width the labelled bar needs is ESTIMATED from the
+  // label lengths (13px uppercase headings) and compared with the nav's own width, which is flex-1 and so never depends on what is inside it. (An
+  // earlier version measured the labelled content and flipped to icons; it could get stuck in icon mode on a wide screen.)
+  const [navWidth, setNavWidth] = useState(0)
   useLayoutEffect(() => {
     const el = navRef.current
     if (!el) return
-    const measure = () => {
-      setVw(window.innerWidth)
-      if (labels) {
-        if (el.scrollWidth > el.clientWidth + 1) { fullWidth.current = el.scrollWidth; setLabels(false) }
-      } else if (fullWidth.current && el.clientWidth >= fullWidth.current) setLabels(true)
-    }
+    const measure = () => { setVw(window.innerWidth); setNavWidth(el.clientWidth) }
     measure()
     const ro = new ResizeObserver(measure)
     ro.observe(el)
     return () => ro.disconnect()
-  }, [labels, all.length])
+  }, [])
+  // Three steps as the bar gets tighter: labels + drop-down arrows, labels only, icons only.
+  const CHAR_W = 9.2
+  const needLabels = 56 + 34 + (4 * CHAR_W + 48) + all.reduce((n, s) => n + s.label.length * CHAR_W + 48, 0)
+  const needArrows = needLabels + all.length * 20
+  const labels = navWidth === 0 || navWidth >= needLabels
+  const arrows = navWidth === 0 || navWidth >= needArrows
 
   const place = (key: string) => {
     const b = btnRefs.current.get(key)
@@ -134,7 +135,7 @@ export function MegaNav() {
           <span className="[&_svg]:w-4 [&_svg]:h-4">{ICONS.home}</span>{labels && 'Home'}
         </NavLink>
         {all.map((s) => (
-          <SectionButton key={s.key} section={s} labels={labels} active={hasActive(s.items)} open={openKey === s.key}
+          <SectionButton key={s.key} section={s} labels={labels} arrows={arrows} active={hasActive(s.items)} open={openKey === s.key}
             btnRef={(el) => { if (el) btnRefs.current.set(s.key, el); else btnRefs.current.delete(s.key) }}
             onToggle={() => (openKey === s.key ? setOpenKey(null) : openSection(s.key))} onHover={() => { if (openKey) openSection(s.key) }} />
         ))}

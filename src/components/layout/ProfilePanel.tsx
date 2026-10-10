@@ -8,6 +8,7 @@ import { FONT_GROUPS, useFontGroup } from '@/hooks/useFontGroup'
 import { COLOR_THEMES, useColorTheme } from '@/hooks/useColorTheme'
 import { NAV_LAYOUTS, useDockPrefs, useMegaPrefs, applyMegaPrefs, useNavAccordion, useNavLayout } from '@/hooks/useNavLayout'
 import { useNavModel } from './useNavModel'
+import { MegaSectionList } from './MegaSectionList'
 import { PAGE_ANIMATIONS, usePageAnimation } from '@/hooks/usePageAnimation'
 import { TABLE_STYLES, useTableStyle } from '@/hooks/useTableStyle'
 import { useProfilePref } from '@/hooks/useProfilePrefs'
@@ -76,13 +77,6 @@ export function ProfilePanel({ onClose, canNotify, permission, notifPrefs, setNo
   const { sections: navSections } = useNavModel()
   const mega = useMegaPrefs()
   const megaAll = applyMegaPrefs([...navSections.map((s) => ({ key: s.key, label: s.label })), { key: 'shortcuts', label: 'Shortcuts' }], mega.order, [])
-  const moveMega = (key: string, dir: -1 | 1) => {
-    const keys = megaAll.map((s) => s.key)
-    const i = keys.indexOf(key), j = i + dir
-    if (i < 0 || j < 0 || j >= keys.length) return
-    ;[keys[i], keys[j]] = [keys[j], keys[i]]
-    mega.setOrder(keys)
-  }
   const [navAccordion, setNavAccordion] = useNavAccordion()
   const [pinnedMode, setPinnedMode] = useProfilePref<'section' | 'always'>('nav:pinnedMode', 'section')
   const { animation: pageAnim, setAnimation: setPageAnim } = usePageAnimation()
@@ -265,19 +259,8 @@ export function ProfilePanel({ onClose, canNotify, permission, notifPrefs, setNo
                   ))}
                   <div className={`mt-1 flex flex-col gap-1 pl-0.5 ${navLayout === 'mega' ? '' : 'opacity-50'}`}>
                     <span className="text-[11px] font-body text-navy dark:text-[#F2F1E6]">Mega menu: sections in the bar</span>
-                    <div className="flex flex-col gap-0.5">
-                      {megaAll.map((s, i) => (
-                        <div key={s.key} className="flex items-center gap-1.5">
-                          <input type="checkbox" className="accent-sky" disabled={navLayout !== 'mega'} checked={!mega.hidden.includes(s.key)}
-                            onChange={(e) => mega.setHidden(e.target.checked ? mega.hidden.filter((k) => k !== s.key) : [...mega.hidden, s.key])} aria-label={`Show ${s.label}`} />
-                          <span className="flex-1 text-xs font-body text-navy dark:text-[#F2F1E6]">{s.label}</span>
-                          <button type="button" disabled={navLayout !== 'mega' || i === 0} onClick={() => moveMega(s.key, -1)} aria-label={`Move ${s.label} up`}
-                            className="px-1.5 text-xs text-navy dark:text-[#F2F1E6] disabled:opacity-30 hover:text-inky">▲</button>
-                          <button type="button" disabled={navLayout !== 'mega' || i === megaAll.length - 1} onClick={() => moveMega(s.key, 1)} aria-label={`Move ${s.label} down`}
-                            className="px-1.5 text-xs text-navy dark:text-[#F2F1E6] disabled:opacity-30 hover:text-inky">▼</button>
-                        </div>
-                      ))}
-                    </div>
+                    <MegaSectionList items={megaAll} hidden={mega.hidden} disabled={navLayout !== 'mega'} onReorder={mega.setOrder}
+                      onToggle={(key, shown) => mega.setHidden(shown ? mega.hidden.filter((k) => k !== key) : [...mega.hidden, key])} />
                     <span className="text-[10px] font-body text-navy/60 dark:text-[#F2F1E6]/70">Hidden sections stay reachable with search (Ctrl K), and you can add their pages to your Home page.</span>
                   </div>
                   <div className={`mt-1 flex flex-col gap-1 pl-0.5 ${navLayout === 'dock' ? '' : 'opacity-50'}`}>
